@@ -1,16 +1,36 @@
 #!/usr/bin/env python3
 """
-title: 'create_metadata.py'
-# project: 'BIOL624 Final Project: Selection Detection in Lady Beetles'
-# author: 'Reina Hastings'
-# contact: 'reinahastings13@gmail.com'
-# date created: 11/12/2025
-# last modified: 11/17/2025
-# purpose: 'WIP'
-# inputs:
-# outputs:
-# required libraries: pandas 
-# notes:
+title: create_metadata.py
+project: BIOL624 Final Project — Selection Detection in Lady Beetles
+author: Reina Hastings
+contact: reinahastings13@gmail.com
+date created: 2025-11-17
+last modified: 2025-11-20
+
+purpose:
+    Parse Excel metadata, extract city/country/latitude/longitude, and
+    generate standardized population files for downstream analyses.
+
+inputs:
+    - Excel metadata file (e.g., C7_samples_locations_updated.xlsx)
+    - Required columns: Sample, Location Info, Continent (CHI/WEU/EEU/USA)
+
+outputs:
+    - samples.tsv
+    - popmap.txt
+    - pop_<POP>.txt for each population in the chosen grouping
+    - parse_report.tsv
+    - missing_rows.tsv
+    - create_metadata.log
+
+required libraries:
+    - pandas, argparse, pathlib, re
+    
+usage example:
+    python create_metadata.py \
+        --excel ../metadata/C7_samples_locations_updated.xlsx  \
+        --outdir ../metadata \
+        --group-by continent
 """
 
 import re
@@ -23,6 +43,7 @@ DEG = r'(?:°|º)?'
 HEMI = r'[NnSsEeWw]?'
 COORD_TOKEN_RE = re.compile(rf'\s*({NUM})\s*{DEG}\s*({HEMI})\s*$')
 
+
 def to_float_with_hemi(tok: str):
     tok = tok.strip()
     m = COORD_TOKEN_RE.match(tok)
@@ -30,15 +51,15 @@ def to_float_with_hemi(tok: str):
         m2 = re.search(NUM, tok)
         return float(m2.group(0)) if m2 else None
     val = float(m.group(1))
-    hemi = m.group(2).upper() if m.group(2) else None
+    hemi = (m.group(2) or "").upper()
     if hemi == 'S':
         val = -abs(val)
     if hemi == 'W':
         val = -abs(val)
     return val
 
+
 def looks_like_coord_pair(text: str) -> bool:
-    """Return True if 'a, b' looks like coordinates (numbers with optional N/S/E/W)."""
     parts = [p.strip() for p in text.split(',') if p.strip()]
     if len(parts) != 2:
         return False
@@ -46,35 +67,29 @@ def looks_like_coord_pair(text: str) -> bool:
     b_ok = re.search(NUM, parts[1]) is not None
     return a_ok and b_ok
 
+
 def parse_location_info(raw: str):
-    """
-    Parse 'City (Neighborhood), COUNTRY (lat, lon)' into:
-    city, country, lat, lon.
-    Chooses the parenthetical group that actually contains coordinates.
-    """
     if pd.isna(raw):
         return {'city': None, 'country': None, 'lat': None, 'lon': None, 'raw': raw}
 
     s = str(raw)
 
-    # Find all (...) groups; pick the one that looks like coordinates
+    # find all (...) groups, pick last one that looks like coordinates
     paren_groups = re.findall(r'\(([^()]*)\)', s)
     coord_text = None
-    for g in paren_groups[::-1]:  # check from the end; coords usually last
+    for g in paren_groups[::-1]:
         if looks_like_coord_pair(g):
             coord_text = g
             break
 
-    # Remove the chosen coordinate group from the string (if present)
-    if coord_text is not None:
+    if coord_text:
         s_wo_coords = re.sub(r'\(' + re.escape(coord_text) + r'\)\s*', '', s)
     else:
         s_wo_coords = s
 
-    # Also remove any remaining non-coordinate parentheses (e.g., '(Latsida)')
+    # remove any remaining non-coordinate parentheses
     s_head = re.sub(r'\([^()]*\)', '', s_wo_coords).strip().rstrip(',')
 
-    # Now split head into City, Country
     city = country = None
     if ',' in s_head:
         parts = [p.strip() for p in s_head.split(',') if p.strip()]
@@ -91,7 +106,6 @@ def parse_location_info(raw: str):
         else:
             city = s_head
 
-    # Parse coordinates if we found them
     lat = lon = None
     if coord_text:
         p = [p.strip() for p in coord_text.split(',') if p.strip()]
@@ -102,30 +116,54 @@ def parse_location_info(raw: str):
     return {'city': city, 'country': country, 'lat': lat, 'lon': lon, 'raw': raw}
 
 
-
 def main():
-    ap = argparse.ArgumentParser(description='Create samples.tsv and popmap.txt from Excel metadata.')
-    ap.add_argument('--excel', required=True, help='Path to Excel (e.g., C7_samples_locations.xlsx)')
-    ap.add_argument('--sheet', default=0, help='Sheet name or index (default 0)')
-    ap.add_argument('--outdir', default='', help='Output directory (default: current directory)')
-    # Fixed column names expected in the Excel:
-    ap.add_argument('--sample-col', default='Sample', help='Excel column with sample IDs (default: Sample)')
-    ap.add_argument('--locinfo-col', default='Location Info', help='Excel column with "City, Country (lat, lon)" (default: Location Info)')
-    ap.add_argument('--continent-col', default='Continent', help='Excel column with continent (default: Continent)')
-    # Population labeling rule:
+    ap = argparse.ArgumentParser(description='Create samples.tsv and population files from Excel metadata.')
+    ap.add_argument('--excel', required=True, help='Path to Excel metadata file')
+    ap.add_argument('--outdir', default='', help='Output directory (default: current working dir)')
+    ap.add_argument('--sample-col', default='Sample', help='Column with sample IDs')
+    ap.add_argument('--locinfo-col', default='Location Info',
+                    help='Column containing "City, Country (lat, lon)"')
+    ap.add_argument('--continent-col', default='Continent',
+                    help='Column containing continent code (e.g., CHI/WEU/EEU/USA)')
     ap.add_argument('--group-by', default='continent', choices=['city', 'country', 'continent'],
-                    help='Choose how to label populations in popmap (default: city)')
+                    help='Label grouping for pop files (default: continent)')
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_excel(args.excel, sheet_name=args.sheet)
+    # set up log file
+    log_path = outdir / 'create_metadata.log'
+    log = open(log_path, 'w', encoding='utf-8')
 
-    # hard checks for expected columns
+    def log_print(msg: str):
+        print(msg)
+        log.write(msg + '\n')
+
+    log_print(f"Running create_metadata.py")
+    log_print(f"  Excel file   : {args.excel}")
+    log_print(f"  Output dir   : {outdir}")
+    log_print(f"  group_by     : {args.group_by}")
+    log_print(f"  sample_col   : {args.sample_col}")
+    log_print(f"  locinfo_col  : {args.locinfo_col}")
+    log_print(f"  continent_col: {args.continent_col}")
+
+    # read first sheet
+    try:
+        df = pd.read_excel(args.excel, sheet_name=0)
+    except Exception as e:
+        log_print(f"ERROR: Failed to read Excel file: {e}")
+        log.close()
+        raise SystemExit(f"ERROR: Failed to read Excel file '{args.excel}': {e}")
+
+    log_print(f"Read {len(df)} rows from Excel.")
+
+    # hard column checks
     for col in (args.sample_col, args.locinfo_col, args.continent_col):
         if col not in df.columns:
-            raise SystemExit(f"ERROR: expected column '{col}' not found. Available: {list(df.columns)}")
+            log_print(f"ERROR: expected column '{col}' not found. Available: {list(df.columns)}")
+            log.close()
+            raise SystemExit(f"ERROR: expected column '{col}' not found in Excel sheet.")
 
     parsed = df[args.locinfo_col].apply(parse_location_info).apply(pd.Series)
 
@@ -138,7 +176,7 @@ def main():
         'continent': df[args.continent_col]
     })
 
-    # population labels
+    # choose grouping
     if args.group_by == 'city':
         pop = samples['city']
     elif args.group_by == 'country':
@@ -146,27 +184,49 @@ def main():
     else:
         pop = samples['continent']
 
-    population = (pop.astype(str)
-                    .str.strip()
-                    .str.replace(' ', '_', regex=False)
-                    .str.replace('[(),]', '', regex=True))
+    population = (
+        pop.astype(str)
+           .str.strip()
+           .str.replace(' ', '_', regex=False)
+           .str.replace('[(),]', '', regex=True)
+    )
 
     samples.insert(1, 'population', population)
 
-    # write outputs
+    # outputs
     samples_path = outdir / 'samples.tsv'
     popmap_path = outdir / 'popmap.txt'
     parse_report_path = outdir / 'parse_report.tsv'
     missing_path = outdir / 'missing_rows.tsv'
 
-    samples[['sample_id','population','country','city','latitude','longitude','continent']] \
+    samples[['sample_id', 'population', 'country', 'city', 'latitude', 'longitude', 'continent']] \
         .to_csv(samples_path, sep='\t', index=False)
 
     with open(popmap_path, 'w', encoding='utf-8') as f:
-        for sid, poplbl in samples[['sample_id','population']].itertuples(index=False):
-            f.write(f'{sid}\t{poplbl}\n')
+        for sid, poplbl in samples[['sample_id', 'population']].itertuples(index=False):
+            f.write(f"{sid}\t{poplbl}\n")
 
-    # debugging report (shows original location info and parsed pieces)
+    # log population summary
+    pop_counts = samples['population'].value_counts(dropna=False)
+    log_print("Population label summary (population -> n_samples):")
+    for lbl, count in pop_counts.items():
+        log_print(f"  {lbl!r}: {count}")
+
+    # make population-specific pop files
+    created_pop_files = []
+    for grp in sorted(samples['population'].unique()):
+        if pd.isna(grp):
+            continue
+        popfile = outdir / f"pop_{grp}.txt"
+        subset = samples.loc[samples['population'] == grp, 'sample_id']
+        subset.to_csv(popfile, index=False, header=False)
+        created_pop_files.append(popfile)
+        log_print(f"  Wrote pop file for group '{grp}': {popfile} (n={len(subset)})")
+
+    if not created_pop_files:
+        log_print("WARNING: No population-specific pop_*.txt files were created (no non-NA groups?).")
+
+    # parse report
     pr = pd.DataFrame({
         'sample_id': samples['sample_id'],
         'location_info': df[args.locinfo_col],
@@ -177,19 +237,24 @@ def main():
     })
     pr.to_csv(parse_report_path, sep='\t', index=False)
 
-    # flag rows with ANY missing core fields
-    required = ['sample_id','population','country','city','latitude','longitude','continent']
-    missing_mask = samples[required].isna().any(axis=1) | (samples['population'].astype(str) == 'nan')
+    # missing rows
+    required = ['sample_id', 'population', 'country', 'city', 'latitude', 'longitude', 'continent']
+    missing_mask = samples[required].isna().any(axis=1)
     missing_rows = samples.loc[missing_mask]
-    if len(missing_rows):
+    if len(missing_rows) > 0:
         missing_rows.to_csv(missing_path, sep='\t', index=False)
-        print(f'Wrote: {missing_path} (n={len(missing_rows)})')
+        log_print(f"Wrote rows with missing required fields: {missing_path} (n={len(missing_rows)})")
     else:
-        print('No rows with missing required fields.')
+        log_print("No rows with missing required fields.")
 
-    print(f'Wrote: {samples_path}')
-    print(f'Wrote: {popmap_path}')
-    print(f'Wrote: {parse_report_path}')
+    log_print(f"Wrote: {samples_path}")
+    log_print(f"Wrote: {popmap_path}")
+    log_print(f"Wrote: {parse_report_path}")
+    log_print(f"Log written to: {log_path}")
+    log_print("Done.")
+
+    log.close()
+
 
 if __name__ == '__main__':
     main()

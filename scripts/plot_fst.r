@@ -1,31 +1,63 @@
 #!/usr/bin/env Rscript
 
-# title: 'plot_fst.R'
-# project: 'BIOL624 Final Project: Selection Detection in Lady Beetles'
-# author: 'Reina Hastings'
-# contact: 'reinahastings13@gmail.com'
-# date created: 11/17/2025
-# last modified: 11/17/2025
-# purpose: 'Plot windowed FST for pairwise comparisons between populations.'
+# title: plot_fst.R
+# project: BIOL624 Final Project — Selection Detection in Lady Beetles
+# author: Reina Hastings
+# contact: reinahastings13@gmail.com
+# date created: 2025-11-17
+# last modified: 2025-11-20
 #
-# usage:
-#   Rscript plot_fst.R ../results/fst_Eur_vs_Asia all
-#   Rscript plot_fst.R ../results/fst_Eur_vs_NA NC_058189.1.filtered
+# purpose:
+#   Plot windowed FST for pairwise comparisons between populations, using
+#   vcftools --weir-fst-pop windowed outputs.
 #
-# note:
-#   First argument  = results directory containing *_FST.windowed.weir.fst files
-#   Remaining args  = chromosome names OR 'all' to plot all chromosomes
+# inputs:
+#   - results_dir: directory containing FST files named:
+#       <chr>_FST.windowed.weir.fst
+#     e.g., ../results/fst_CHI_vs_WEU_results
+#   - chromosome arguments:
+#       * one or more chromosome IDs (matching <chr> in the filenames), or
+#       * the keyword 'all' to auto-detect all chromosomes from the FST files
+#
+# outputs:
+#   - <results_dir>/figs/fst/FST_<chr>_<label>.png
+#   - <results_dir>/figs/fst/All_FST_faceted_<label>.png
+#
+# required packages:
+#   - tidyverse
+#
+# usage examples:
+#   # Plot all chromosomes for CHI vs WEU comparison
+#   Rscript plot_fst.R ../results/fst_CHI_vs_WEU_results all
+#
+#   # Plot a single chromosome
+#   Rscript plot_fst.R ../results/fst_CHI_vs_WEU_results NC_058189.1.filtered
 
 suppressPackageStartupMessages({
   library(tidyverse)
 })
 
+print_usage <- function() {
+  cat(
+    "Usage:\n",
+    "  Rscript plot_fst.R <results_dir> <chr1|all> [<chr2> ...]\n\n",
+    "Arguments:\n",
+    "  results_dir   Directory containing *_FST.windowed.weir.fst files\n",
+    "  chr1|all      One chromosome ID (e.g., NC_058189.1.filtered) or 'all'\n",
+    "  chr2 ...      Optional additional chromosome IDs\n\n",
+    "Examples:\n",
+    "  # CHI vs WEU, all chromosomes\n",
+    "  Rscript plot_fst.R ../results/fst_CHI_vs_WEU_results all\n\n",
+    "  # USA vs WEU, one chromosome\n",
+    "  Rscript plot_fst.R ../results/fst_USA_vs_WEU_results NC_058189.1.filtered\n",
+    sep = ""
+  )
+}
+
 args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) < 2) {
-  cat("Usage:\n",
-      "  Rscript plot_fst.R <results_dir> <chr1> [<chr2> ...]\n",
-      "  Rscript plot_fst.R <results_dir> all\n\n")
+  print_usage()
   quit(save = "no", status = 1)
 }
 
@@ -38,15 +70,17 @@ fst_dir <- results_dir
 out_dir <- file.path(results_dir, "figs", "fst")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-# determine comparison label (e.g., 'Eur_vs_Asia')
+# derive comparison label from results_dir
+# e.g., "../results/fst_CHI_vs_WEU_results" -> "CHI_vs_WEU"
 results_label <- basename(normalizePath(results_dir))
 results_label <- sub("^results[_-]?", "", results_label)
 results_label <- sub("^fst[_-]?", "", results_label)
+results_label <- sub("_results$", "", results_label)
 
 message("Comparison label: ", results_label)
 
 # identify chromosomes to plot
-fst_files <- list.files(fst_dir, pattern = "_FST.windowed.weir.fst$", full.names = TRUE)
+fst_files <- list.files(fst_dir, pattern = "_FST\\.windowed\\.weir\\.fst$", full.names = TRUE)
 
 if (length(fst_files) == 0) {
   stop("No FST files found in: ", fst_dir)
@@ -69,7 +103,10 @@ if (length(chrom_args) == 1 && chrom_args[1] == "all") {
 # helper to read FST file
 read_fst_file <- function(chr) {
   fpath <- file.path(fst_dir, paste0(chr, "_FST.windowed.weir.fst"))
-  if (!file.exists(fpath)) return(NULL)
+  if (!file.exists(fpath)) {
+    warning("Missing FST file for chromosome: ", chr, " (", fpath, ")")
+    return(NULL)
+  }
   df <- read.table(fpath, header = TRUE)
   df$CHR_ID <- chr
   df
@@ -83,21 +120,22 @@ for (chr in chroms) {
   fst <- read_fst_file(chr)
   if (is.null(fst)) next
 
-  # drop NA values (windows with no variants)
+  # drop NA values (windows with no variants / undefined FST)
   fst <- fst %>% filter(!is.na(WEIGHTED_FST))
 
   median_fst <- median(fst$WEIGHTED_FST, na.rm = TRUE)
 
-  message(sprintf("Chrom %s median FST: %.4f", chr, median_fst))
+  message(sprintf("Chrom %s median WEIGHTED_FST: %.4f", chr, median_fst))
 
   p_chr <- ggplot(fst, aes(x = BIN_START, y = WEIGHTED_FST)) +
     geom_hline(yintercept = median_fst, color = "red", alpha = 0.7) +
     geom_point(alpha = 0.5, size = 0.6) +
     labs(
-      title    = paste("FST -", chr),
+      title    = paste("Windowed FST -", chr),
       subtitle = paste("Comparison:", results_label,
-                       " | median FST =", round(median_fst, 4)),
-      x = "Position (bp)", y = "Weighted FST"
+                       "| median WEIGHTED_FST =", round(median_fst, 4)),
+      x = "Position (bp)",
+      y = "Weighted FST"
     ) +
     theme_bw()
 
@@ -121,14 +159,16 @@ if (length(all_fst_list) > 0) {
     geom_hline(
       data = meds,
       aes(yintercept = median_fst),
-      color = "red", alpha = 0.7, inherit.aes = FALSE
+      color = "red",
+      alpha = 0.7
     ) +
     geom_point(alpha = 0.4, size = 0.4) +
-    facet_wrap(~CHR_ID, scales = "free_x") +
+    facet_wrap(~ CHR_ID, scales = "free_x") +
     labs(
-      title    = paste("FST across chromosomes"),
+      title    = "Windowed FST across chromosomes",
       subtitle = paste("Comparison:", results_label),
-      x = "Position (bp)", y = "Weighted FST"
+      x        = "Position (bp)",
+      y        = "Weighted FST"
     ) +
     theme_bw() +
     theme(strip.text = element_text(size = 8))
