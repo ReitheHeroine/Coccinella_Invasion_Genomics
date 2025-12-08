@@ -1,0 +1,170 @@
+############################################
+## ENVIRONMENTAL NICHE MODELING – FULL SCRIPT
+## Climate: wc2.1_2.5m
+## Occurrence: GBIF_Occurance/occurrence.txt
+############################################
+
+## STEP 0: Load packages and set working directory
+############################################
+
+library(raster)
+library(dismo)
+library(BiodiversityR)
+library(geosphere)
+library(spThin)
+library(rJava)
+
+setwd("/home/exouser/Documents/ProjectData")
+
+############################################
+## STEP 1: Load climate data
+############################################
+
+clim_files <- list.files(
+  "data/climate/wc2.1_2.5m",
+  pattern = "\\.tif$",
+  full.names = TRUE
+)
+
+climate <- stack(clim_files)
+climate_world <- climate
+
+
+############################################
+## STEP 2: Load and prepare occurrence data
+############################################
+
+occ_file <- "GBIF_Occurance/occurrence.txt"
+
+# Read GBIF occurrence data
+occ_raw <- read.delim(
+  occ_file,
+  header = TRUE,
+  sep = "\t",
+  quote = "",
+  stringsAsFactors = FALSE
+)
+
+# Ensure coordinates are numeric
+occ_raw$decimalLongitude <- as.numeric(occ_raw$decimalLongitude)
+occ_raw$decimalLatitude  <- as.numeric(occ_raw$decimalLatitude)
+
+# Remove rows with missing coordinates
+occ_clean <- occ_raw[!is.na(occ_raw$decimalLongitude) &
+                     !is.na(occ_raw$decimalLatitude), ]
+
+# Extract lon/lat
+sp <- data.frame(
+  Dec.long = occ_clean$decimalLongitude,
+  Dec.lat  = occ_clean$decimalLatitude
+)
+
+# Remove duplicates
+sp <- sp[!duplicated(sp), ]
+
+# Raw occurrence plot
+plot(sp$Dec.long, sp$Dec.lat,
+     asp = 1,
+     xlab = "Longitude",
+     ylab = "Latitude",
+     main = "Raw GBIF Coordinates",
+     pch = 16, col = "black", cex = 0.3)
+
+cat("Number of raw occurrence points:", nrow(sp), "\n")
+
+
+############################################
+## STEP 3: Thin occurrence data
+############################################
+
+locs <- sp
+
+locs_for_thin <- data.frame(
+  Longitude = locs$Dec.long,
+  Latitude  = locs$Dec.lat,
+  Species   = "sp1"
+)
+
+thin_res <- thin(
+  loc.data = locs_for_thin,
+  lat.col  = "Latitude",
+  long.col = "Longitude",
+  spec.col = "Species",
+  thin.par = 1,
+  reps     = 1,
+  write.files = FALSE,
+  locs.thinned.list.return = TRUE
+)
+
+locs_thinned <- thin_res[[1]][, c("Longitude", "Latitude")]
+colnames(locs_thinned) <- c("Dec.long", "Dec.lat")
+
+sp <- locs_thinned
+
+cat("Number of thinned occurrence points:", nrow(sp), "\n")
+
+
+############################################
+## STEP 4: Crop climate to species range
+############################################
+
+longbounds <- c(min(sp$Dec.long) - 5, max(sp$Dec.long) + 5)
+latbounds  <- c(min(sp$Dec.lat)  - 5, max(sp$Dec.lat)  + 5)
+
+ext <- extent(c(longbounds, latbounds))
+
+climate <- crop(climate, ext)
+
+# Plot cropped climate + points
+plot(climate[[1]], main = "Cropped Climate (BIO1) + Occurrences")
+points(sp$Dec.long, sp$Dec.lat,
+       cex = 0.3, pch = 16, col = "black")
+
+
+############################################
+## STEP 5: Initialize Java for MaxEnt
+############################################
+
+.jinit()
+
+
+############################################
+## STEP 6: Train MaxEnt model
+############################################
+
+model <- maxent(climate, sp)
+
+
+############################################
+## STEP 7: Predict suitability (cropped)
+############################################
+
+pred <- predict(model, climate)
+
+plot(pred, main = "Predicted Suitability (Cropped)")
+points(sp$Dec.long, sp$Dec.lat,
+       cex = 0.3, pch = 16, col = "black")
+
+
+############################################
+## STEP 8: Variable contributions + response curves
+############################################
+
+plot(model)
+response(model)
+
+
+############################################
+## STEP 9: Global projection
+############################################
+
+pred_world <- predict(model, climate_world)
+
+plot(pred_world, main = "Predicted Suitability (Global)")
+points(sp$Dec.long, sp$Dec.lat,
+       cex = 0.3, pch = 16, col = "black")
+
+
+############################################
+## END OF SCRIPT
+############################################
