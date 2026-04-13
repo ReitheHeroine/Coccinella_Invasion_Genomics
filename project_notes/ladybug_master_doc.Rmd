@@ -1,0 +1,566 @@
+---
+title: "Ladybug PopGen -- Project Documentation"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+    toc_depth: 3
+    theme: default
+---
+
+**Last Updated:** 2026-04-13
+
+**Working Project Name:** Ladybug PopGen (BIOL624 Final Project)
+
+**Purpose:** This document is the current-state reference for the *Coccinella septempunctata* population genomics project. It contains all background context, pipeline architecture, analysis component summaries, methodology, results, and known limitations. It describes what the project is and how it is designed, not the chronological history of how it got there.
+
+**Document tiers:**
+
+- **This document** (`ladybug_master_doc.Rmd`): Current-state reference. Architecture, component summaries, methodology, results, limitations, references.
+- **Project history** (`ladybug_project_history.Rmd`): Chronological record. Decision Register and Development Log. Append-only.
+
+---
+
+# 1. Project Overview
+
+## 1.1 Purpose and Motivation
+
+This project analyzes population genomic data from 88 *Coccinella septempunctata* (seven-spotted lady beetle) individuals to identify genomic signatures of selection associated with biological invasion. The core research question: are there genomic regions undergoing selection pressure in invasive *C. septempunctata* populations, and what types of selection (divergent, balancing, directional) are acting?
+
+*C. septempunctata* was introduced from its native Chinese range into Europe and North America for biological control of aphids. The global invasion provides a natural experiment: comparing native and invasive populations reveals genomic changes driven by bottlenecks, drift, and adaptation to novel environments. Identifying these loci has applications for biocontrol optimization and invasion prediction.
+
+## 1.2 Study Design
+
+**Species:** *Coccinella septempunctata* (seven-spotted lady beetle)
+
+**Sample size:** 88 individuals across four populations:
+
+| Population | Code | Role | n | Geographic Origin |
+|---|---|---|---|---|
+| China | CHI | Native (ancestral reference) | 5 | East Asia |
+| Eastern Europe | EEU | Invasive | 18 | Czech Republic, Slovakia, etc. |
+| Western Europe | WEU | Invasive | 25 | Germany, Netherlands, etc. |
+| North America | USA | Invasive (secondary) | 40 | Eastern and Western US |
+
+**Biological context:**
+
+- CHI represents the native/ancestral source population.
+- EEU and WEU represent primary invasions into Europe (possibly independent or from a shared introduction).
+- USA represents a secondary invasion, likely from European source populations.
+- Invasion bottlenecks are expected to create genome-wide allele frequency shifts.
+- Selection for local adaptation is expected in invasive ranges.
+
+**Genomic data:** ~800,000 biallelic SNPs across 10 chromosomes (NC_058189.1 through NC_058198.1). NC_058198.1 is the sex chromosome, excluded from FST and selection analyses.
+
+## 1.3 Project Scope
+
+**In scope (current phase):**
+
+- Population genetic diversity (Tajima's D, nucleotide diversity) across all four populations
+- Pairwise population differentiation (FST) using both genome-wide and windowed approaches
+- Selection scan using unified percentile method with OutFLANK validation
+- pcadapt as additional PCA-based selection detection method (in progress)
+- Gene annotation via phylogenetically-informed BLAST cascade
+- Functional categorization and GO enrichment of selection candidates
+
+**Explicitly out of scope (current phase):**
+
+- Admixture analysis (ADMIXTURE, STRUCTURE) -- LD-pruned dataset available but not yet analyzed
+- Linkage disequilibrium decay analysis
+- Demographic modeling (dadi, fastsimcoal2)
+- Haplotype-based selection methods (hapFLK, iHS)
+
+**Future considerations (not committed):**
+
+- Temporal sampling of established populations
+- Comparative invasion genomics with *H. axyridis*
+- RNAi functional validation of top candidate genes
+
+---
+
+# 2. Architecture and Design
+
+## 2.1 Analysis Pipeline Overview
+
+The project follows a sequential population genomics pipeline. Each stage produces outputs consumed by downstream stages.
+
+```
+VCF Files (pre-filtered)
+    |
+    v
+[1] Population Diversity ----------> Tajima's D, pi per population
+    |
+    v
+[2] Population Differentiation ----> Genome-wide FST (population comparisons)
+    |                                 Windowed FST (selection scans)
+    v
+[3] Selection Scan ----------------> Outlier windows (percentile method)
+    |                                 Outlier SNPs (OutFLANK, pcadapt)
+    v
+[4] Gene Annotation ---------------> SNP-to-gene mapping, BLAST cascade
+    |
+    v
+[5] Functional Analysis -----------> GO enrichment, pathway categorization
+```
+
+## 2.2 Input Specification
+
+**Primary input:** Per-chromosome filtered VCF files.
+
+- Location: `data/VARIANTS_BY_CHR/FILTERED_CHR_VCFS/*.filtered.vcf.gz`
+- 10 files, one per chromosome
+- Pre-filtered using vcftools (see Section 4.1 for parameters)
+
+**WARNING:** `data/WG_VARIANTS/` contains an UNFILTERED whole-genome VCF. It must never be used directly for analysis. Always use the per-chromosome filtered VCFs.
+
+**Population assignment files:** `metadata/pop_CHI.txt`, `pop_EEU.txt`, `pop_WEU.txt`, `pop_USA.txt` (one sample ID per line, matching VCF column headers).
+
+**Reference genome:** *Coccinella septempunctata* GCF_907165205.1, located at `data/coccinella_septempunctata_/ncbi_dataset/`.
+
+## 2.3 Output Specification
+
+Each analysis component produces results in a dedicated subdirectory under `results/`. Key outputs:
+
+- **Diversity:** Per-population Tajima's D and pi in 5kb windows. Summary tables and plots.
+- **FST:** Per-comparison genome-wide weighted FST (single value) and windowed FST (per-window values for selection scans). Manhattan plots.
+- **Selection scan:** Outlier window lists at 0.5%, 1%, 2% thresholds. Pattern categorization (BOTH / INVASION_SPECIFIC / POST_INVASION). Confidence levels.
+- **Annotation:** Gene-level summaries with BLAST identity scores and GO terms.
+- **Functional analysis:** GO enrichment results, functional category breakdowns.
+
+See `ladybug_file_map.Rmd` for complete directory structure and output locations.
+
+---
+
+# 3. Analysis Components
+
+## 3.0 Metadata and Population Definitions
+
+**Purpose:** Define consistent population assignments used across all analyses.
+
+**Script:** `scripts/create_metadata.py`
+
+**Outputs:** `metadata/samples.tsv` (full metadata), `metadata/popmap.txt` (sample-to-population mapping), `metadata/pop_*.txt` (per-population sample lists for vcftools).
+
+**Design decisions:** Populations refined from continent-level (Asia/Europe/North America) to four regional groups (CHI/EEU/WEU/USA) for better resolution of invasion dynamics. See project history Decision Register for rationale.
+
+**Status:** Complete.
+
+## 3.1 Population Genetic Diversity (Tajima's D, Nucleotide Diversity)
+
+**Purpose:** Characterize within-population genetic variation to detect demographic signatures (bottlenecks, expansions) and selective sweeps.
+
+**Script:** `scripts/diversity.sh`
+
+**Inputs:** Per-chromosome filtered VCFs, population assignment files.
+
+**Outputs:** Per-chromosome Tajima's D and pi in 5kb non-overlapping windows. Site-level pi. Summary statistics per population (median values used due to right-skewed distributions).
+
+**Key methodological decisions:**
+
+- **Window size: 5,000 bp non-overlapping.** Balances statistical power (sufficient SNPs per window) with spatial resolution. Tested 1kb, 5kb, 10kb; 5kb optimal for our SNP density (~80K SNPs per chromosome). Consistent with FST windowed analysis.
+- **Population-specific calculations.** Separate analyses for CHI, EEU, WEU, USA, and all-combined to capture demographic signatures specific to each invasion stage.
+- **Sex chromosome handling.** NC_058198.1 analyzed separately (expected 3/4 autosomal diversity due to hemizygosity).
+
+**Current results:**
+
+| Population | n | Tajima's D | Nucleotide Diversity (pi) | Diversity Loss | Interpretation |
+|---|---|---|---|---|---|
+| CHI (Native) | 5 | +0.17 | 7.07 x 10^-4 | Reference | Demographic stability |
+| EEU (Invasive) | 18 | -0.29 | 6.90 x 10^-4 | 2.4% | Bottleneck signature |
+| WEU (Invasive) | 25 | -0.33 | 6.64 x 10^-4 | 6.1% | Population expansion |
+| USA (Invasive) | 40 | -0.15 | 6.22 x 10^-4 | 12.0% | Secondary invasion |
+
+**Biological interpretation:** Clear demographic hierarchy (CHI > EEU > WEU > USA) consistent with serial bottlenecks along the invasion pathway. 12-14% total diversity reduction in invasive populations represents a moderate bottleneck. Negative Tajima's D in all invasive populations is consistent with population expansion following founder events.
+
+**Known limitations:** CHI results are based on only 5 samples (effective n ~ 3.3 given CHN11 missingness). Tajima's D is sensitive to sample size. See Section 8 for full discussion.
+
+**Status:** Complete. May need re-run if high-missingness samples are excluded.
+
+## 3.2 Population Differentiation (FST)
+
+**Purpose:** Quantify genetic differentiation between all population pairs. Genome-wide FST characterizes overall population relationships; windowed FST provides the input distribution for selection scans.
+
+**Scripts:** `scripts/fst.sh` (computation), `scripts/summarize_fst.R` (reporting)
+
+**Inputs:** Per-chromosome filtered VCFs, population assignment files.
+
+**Outputs:** Genome-wide weighted and mean FST per chromosome (in `fst_genomewide/`). Windowed FST in 5kb windows (in `fst/`). Cumulative summary report across all comparisons.
+
+### 3.2.1 Two FST Calculation Approaches
+
+This project uses both genome-wide and windowed FST, which serve fundamentally different purposes and produce different numerical values. Understanding the distinction is critical.
+
+**Genome-wide FST (Weir & Cockerham weighted):** A single value per population pair, calculated as the ratio of summed variance components across all SNPs. Weights by heterozygosity, so polymorphic (informative) sites contribute more. This is the standard metric for population comparisons and literature comparison.
+
+**Windowed FST:** Per-window values in 5kb non-overlapping windows. Most windows are neutral (low FST), so the distribution mean is dominated by the neutral background. This is the input for selection scans, where outlier windows in the tail of the distribution are candidates for selection.
+
+**Why windowed values are systematically lower:** The genome is predominantly neutral (~95% of windows). Averaging across windows yields values 3-5x lower than the genome-wide weighted FST, because the weighted approach gives more influence to differentiated (informative) sites. This is expected and not an error.
+
+**Three FST value types and when to use each:**
+
+| Metric | Calculation | CHI vs WEU Example | Use Case |
+|---|---|---|---|
+| Genome-wide Weighted FST | Sum(a) / Sum(a+b+c) across all SNPs | 0.147 | Population comparisons, publications, literature comparison |
+| Genome-wide Mean FST | Arithmetic mean of per-SNP FST | 0.073 | Generally not preferred (diluted by uninformative sites) |
+| Windowed Mean FST | Mean of per-window FST values (5kb) | 0.0625 | Selection scans, outlier detection, Manhattan plots |
+
+### 3.2.2 FST Estimator Details
+
+We use the Weir & Cockerham (1984) estimator implemented in vcftools, which partitions variance into among-population, among-individual-within-population, and within-individual components. This estimator is unbiased with respect to sample size, making it appropriate for our unbalanced design (n = 5 to 40).
+
+Genome-wide FST across chromosomes is calculated as a weighted average, where each chromosome's contribution is proportional to its SNP count:
+
+```
+Overall Weighted FST = Sum(FST_chr * N_sites_chr) / Sum(N_sites_chr)
+```
+
+Negative per-SNP FST values are expected when within-population variance exceeds between-population variance. This is statistically normal and not an error.
+
+### 3.2.3 Current Results
+
+**Genome-wide weighted FST (January 9, 2026):**
+
+Sex chromosome (NC_058198.1) excluded. Values reported are weighted FST unless otherwise noted.
+
+| Comparison | Weighted FST | Mean FST | SD | Range (across chromosomes) |
+|---|---|---|---|---|
+| CHI vs EEU | **0.143** | 0.070 | 0.048 | 0.055 - 0.229 |
+| CHI vs USA | **0.140** | 0.066 | 0.047 | 0.052 - 0.221 |
+| CHI vs WEU | **0.147** | 0.073 | 0.051 | 0.057 - 0.246 |
+| EEU vs USA | **0.011** | 0.009 | 0.007 | 0.006 - 0.029 |
+| EEU vs WEU | **0.006** | 0.004 | 0.006 | 0.003 - 0.022 |
+| USA vs WEU | **0.013** | 0.012 | 0.005 | 0.010 - 0.028 |
+
+**Original windowed FST means (for reference):**
+
+| Comparison | Windowed Mean FST | N Windows |
+|---|---|---|
+| CHI vs EEU | 0.0565 | ~160,000 |
+| CHI vs WEU | 0.0625 | ~160,000 |
+| CHI vs USA | 0.0584 | ~160,000 |
+| EEU vs WEU | 0.0036 | ~160,000 |
+| EEU vs USA | 0.0078 | ~160,000 |
+| USA vs WEU | 0.0081 | ~160,000 |
+
+### 3.2.4 Biological Interpretation
+
+**Native vs invasive (weighted FST 0.14-0.15):** Moderate-high differentiation consistent with transcontinental invasion. Reflects both demographic bottlenecks and potential adaptive divergence. Values align with published invasion genomics studies (typically 0.10-0.25). All invasive populations are similarly differentiated from CHI, supporting a CHI -> Europe -> USA invasion pathway.
+
+**Among invasive (weighted FST 0.006-0.013):** Very low differentiation indicates recent shared ancestry. Invasive populations are genetically similar despite geographic separation, consistent with single or few introduction events.
+
+**Sex chromosome impact:** Negligible. NC_058198.1 contributes only 279 SNPs out of 803,821 total (0.03%), so its inclusion or exclusion does not affect genome-wide FST values.
+
+**Status:** Complete.
+
+## 3.3 Selection Scan (Outlier Detection)
+
+**Purpose:** Identify genomic regions with evidence of selection in invasive populations.
+
+**Scripts:** `scripts/comprehensive_selection_scan.R` (primary integration script: multi-threshold outliers, annotation, confidence levels, Figure 1), `scripts/unified_selection_scan.R` (percentile method), `scripts/outflank_diagnostic.R` (OutFLANK validation), `scripts/calculate_outflank_concordance.R` (cross-method concordance), `scripts/pcadapt_selection_scan.R` (pcadapt, in progress)
+
+### 3.3.1 Primary Method: Unified Percentile Approach
+
+**Method:** Identify windows in the top X% of the windowed FST distribution for each pairwise comparison.
+
+**Thresholds:** Top 0.5% (most stringent), 1% (standard), 2% (most inclusive). Applied uniformly to all six pairwise comparisons.
+
+**Rationale for unified approach:** Existing FST outlier methods (OutFLANK, BayeScan) are designed for single demographic contexts. In invasion genomics, different population comparisons have different demographic histories. Applying a consistent percentile threshold across all comparisons provides: (a) methodological consistency for publication, (b) transparent and reproducible thresholds, (c) no need to justify switching methods between comparisons.
+
+**Limitation:** Percentile thresholds are inherently arbitrary (why 1% vs 2%?). No formal FDR control. Addressed through cross-threshold validation and OutFLANK validation where applicable.
+
+**Current results (unified percentile):**
+
+| Threshold | Total Outlier Windows |
+|---|---|
+| Top 0.5% | 993 |
+| Top 1% | 1,963 |
+| Top 2% | 3,922 |
+
+### 3.3.2 Validation Method: OutFLANK
+
+**Purpose:** Validate percentile outliers using OutFLANK's statistically rigorous approach where it performs well.
+
+**How OutFLANK works:** Fits a chi-squared distribution to the trimmed FST distribution to estimate neutral FST (FSTbar), then identifies SNPs whose FST significantly exceeds the neutral expectation. Controls false discovery rate via q-values.
+
+**Why OutFLANK fails for CHI vs invasive comparisons:** OutFLANK estimates FSTbar at 0.11-0.12 for these comparisons, which is very close to the observed genome-wide FST (0.14-0.15). The entire demographic differentiation is treated as neutral background, so only SNPs dramatically exceeding this already-high baseline would be flagged. Result: zero outliers detected despite excellent statistical fit (dfInferred = 2 for all comparisons).
+
+**Literature support:** Lotterhos & Whitlock (2014) demonstrated that OutFLANK performance degrades when mean FST exceeds 0.05-0.10, exactly matching our CHI vs invasive comparisons.
+
+**OutFLANK diagnostic results (all six comparisons):**
+
+| Comparison | dfInferred | FSTbar | Outliers (q<0.05) | Fit Quality |
+|---|---|---|---|---|
+| CHI vs EEU | 2 | 0.112 | 0 | Good |
+| CHI vs USA | 2 | 0.108 | 0 | Good |
+| CHI vs WEU | 2 | 0.123 | 0 | Good |
+| EEU vs USA | 2 | 0.009 | 439 | Good |
+| EEU vs WEU | 2 | 0.003 | 2,456 | Good |
+| USA vs WEU | 2 | 0.011 | 0 | Good |
+
+**OutFLANK-percentile concordance (among-invasive comparisons):**
+
+| Comparison | OutFLANK SNPs | OutFLANK Windows | Percentile Windows (1%) | Both Methods | Concordance |
+|---|---|---|---|---|---|
+| EEU vs WEU | 2,456 | 1,256 | 324 | 39 | 3.11% |
+| EEU vs USA | 439 | 310 | 329 | 12 | 3.87% |
+
+Low concordance (3-4%) reflects fundamental methodological differences between SNP-level statistical testing (OutFLANK) and window-level empirical thresholds (percentile), not analytical failure. A single extreme SNP triggers OutFLANK but may not elevate the window-average FST enough for the percentile method. Windows identified by both methods represent highest-confidence selection targets.
+
+### 3.3.3 Additional Method: pcadapt (In Progress)
+
+**Method:** Identifies SNPs with unusually strong correlations with principal components of population structure. Does not require predefined population assignments.
+
+**Rationale for pcadapt over FLK/hapFLK:** (a) Multiple introductions likely, which violates FLK's tree-like divergence assumption. (b) pcadapt handles reticulate population history naturally. (c) Small CHI sample size (n=5) is problematic for FLK's outgroup requirement. (d) With only 4 populations, FLK has limited degrees of freedom. (e) pcadapt is computationally lighter (15-20 min vs hours).
+
+**PC interpretation framework:** PC1 outliers map to INVASION_SPECIFIC (CHI vs all invasive). PC2 outliers map to POST_INVASION (among-invasive differentiation). Multiple-PC outliers map to BOTH category.
+
+**Status:** PLINK files ready (803,821 variants x 88 individuals). Blocked on sample exclusion decision.
+
+### 3.3.4 Pattern-Based Biological Categorization
+
+Outlier windows are categorized based on which comparison types identify them:
+
+| Pattern | Definition | N Windows (1%) | Interpretation |
+|---|---|---|---|
+| BOTH | Outlier in CHI-vs-invasive AND among-invasive comparisons | 18 | Highest confidence -- selection during invasion AND post-invasion adaptation |
+| INVASION_SPECIFIC | Outlier only in CHI-vs-invasive comparisons | 431 | Changes during invasion events (demographic + possible selection) |
+| POST_INVASION | Outlier only in among-invasive comparisons | 845 | Cleanest selection signal -- local adaptation without demographic confounding |
+
+**Confidence levels (1% threshold):**
+
+| Level | N Windows | Criteria |
+|---|---|---|
+| Very High | 3 | Outlier in 4+ comparisons |
+| High | 230 | Outlier in 3 comparisons |
+| Moderate | 199 | Outlier in 2 comparisons |
+| Single | 862 | Outlier in 1 comparison only |
+
+**Status:** Unified percentile and OutFLANK validation complete. pcadapt pending.
+
+## 3.4 Gene Annotation (BLAST Cascade)
+
+**Purpose:** Map selection candidate SNPs to genes and annotate gene function using phylogenetically-informed orthology.
+
+**Scripts:** `scripts/annotate_outliers_local.py`, `scripts/enrich_gene_annotations.py`, `scripts/enrich_gene_annotations_local.py`
+
+**Challenge:** *C. septempunctata* is a non-model organism with limited functional annotation. Direct NCBI queries yield only 56% coverage for selection candidate genes.
+
+### 3.4.1 Current Pipeline: Two-Step BLAST
+
+**Step 1: C. septempunctata -> H. axyridis** (Asian lady beetle, same family Coccinellidae, ~20-30 MY divergence). Thresholds: >=50% identity, E-value <=1e-10. Success rate: 89%.
+
+**Step 2: H. axyridis -> T. castaneum** (red flour beetle, same order Coleoptera, ~200-250 MY divergence). Thresholds: >=40% identity, E-value <=1e-10. Success rate: 77%.
+
+**Overall:** 56% direct NCBI + 44% orthology-based = 100% gene mapping for 1,844 selection candidates.
+
+### 3.4.2 Planned Upgrade: Three-Tier BLAST Cascade
+
+Adding *Drosophila melanogaster* as a third tier for genes unresolved by the first two steps. *D. melanogaster* has the best-annotated insect genome (decades of FlyBase curation) but is more phylogenetically distant (~300-350 MY).
+
+**Tier 3 thresholds:** >=30% identity, E-value <=1e-5.
+
+**Confidence scoring by tier:**
+
+| Tier | Species | Identity | E-value | Confidence |
+|---|---|---|---|---|
+| 1 | *H. axyridis* | >=70% | <=1e-20 | Highest |
+| 1 | *H. axyridis* | 60-70% | <=1e-10 | High |
+| 2 | *T. castaneum* | >=50% | <=1e-20 | High |
+| 2 | *T. castaneum* | 40-50% | <=1e-10 | Medium |
+| 3 | *D. melanogaster* | >=40% | <=1e-10 | Medium |
+| 3 | *D. melanogaster* | 30-40% | <=1e-5 | Lower |
+
+**Status:** Two-step pipeline complete. Three-tier upgrade planned, deferred until selection scan validation is complete.
+
+## 3.5 Functional Analysis
+
+**Purpose:** Identify biological processes and pathways enriched among selection candidates.
+
+**Scripts:** `scripts/go_enrichment_analysis.R`, `scripts/annotate_outliers_with_go.py`
+
+**Method:** Manual functional categorization of 1,844 genes using GO terms and literature review. GO enrichment analysis using clusterProfiler with *Tribolium*-based annotations transferred via BLAST orthology.
+
+### 3.5.1 Functional Categories
+
+| Category | % of Candidates | Key Components |
+|---|---|---|
+| Signal Transduction & Cellular Communication | 26% | GTPase signaling, cAMP cascades, membrane receptors, protein phosphatases |
+| Cellular Transport & Organization | 24% | Dynein motor complexes, ABC transporters, vesicle trafficking |
+| Protein Processing & Regulation | 18% | Metallocarboxypeptidases, protein kinases, phosphatases, folding machinery |
+| Transcriptional Regulation | 12% | RNA polymerase complexes, transcription factors, chromatin remodeling |
+
+**Biological significance:** Results support a coordinated polygenic adaptation model. Invasion success appears to depend on enhanced cellular flexibility across multiple biological systems rather than single-gene adaptation.
+
+### 3.5.2 Top Priority Gene Candidates
+
+| Gene ID | SNP Count | Function | BLAST Identity | Priority |
+|---|---|---|---|---|
+| LOC123311362 | 1,361 | GTPase signaling | 89% (*H. axyridis*) | Highest |
+| LOC123316425 | 773 | Dynein complex | 93% (*H. axyridis*) | Highest |
+| LOC123310584 | 617 | Metallocarboxypeptidase | 71% (*H. axyridis*) | High |
+| LOC123310549 | 581 | Protein tyrosine phosphatase | 95% (*H. axyridis*) | High |
+| LOC123311970 | 550 | ABC transporter | 82% (*H. axyridis*) | High |
+
+Prioritization based on: (1) SNP density (indication of selection strength), (2) annotation confidence (BLAST identity), (3) biological plausibility for invasion adaptation, (4) cross-method validation.
+
+**Status:** Functional categorization complete for two-step BLAST results. Will need updating after three-tier annotation and potentially after sample exclusion.
+
+---
+
+# 4. Data Quality and Filtering
+
+## 4.1 VCF Quality Filtering (Pre-Project)
+
+Raw VCF data was filtered before the project start using `chr_filter.sh`:
+
+| Parameter | Value | Effect | Rationale |
+|---|---|---|---|
+| `--remove-indels` | -- | Keep SNPs only | Indels have different error profiles |
+| `--maf` | 0.025 | Remove allele frequency <2.5% | Reduces sequencing error noise; with 88 samples (176 alleles), requires >=5 copies of minor allele |
+| `--max-missing` | 0.875 | Require >=77/88 samples genotyped | Ensures reliable allele frequency estimates |
+| `--minQ` | 50 | Keep Q>=50 only | 0.001% error rate -- more stringent than typical Q20-30 |
+| `--min-meanDP` | 10 | Require >=10x mean coverage | Reliable genotype calls |
+| `--max-meanDP` | 50 | Remove >50x mean coverage | Excludes repetitive/paralogous regions |
+
+**Result:** ~800,000 SNPs retained from ~2-3 million raw variants.
+
+**Important implication of `--max-missing`:** This filter removes *SNPs* that are missing in >12.5% of samples, but it does NOT remove *samples* that are missing >12.5% of SNPs. These are orthogonal filters. High-missingness individuals pass through and affect downstream analyses.
+
+**MAF filter and CHI population:** With n=5 for CHI, a CHI-private allele needs to be present in >=3 of 5 individuals to pass the MAF 2.5% filter (assuming absent in all other populations). This may exclude genuinely rare CHI variants. Appropriate for FST-based analyses, which rely on common variants.
+
+## 4.2 Sample Quality (Validated 2026-01-13)
+
+Per-individual missingness was calculated using PLINK's `--missing` flag on the merged dataset.
+
+**11 individuals have >20% missingness:**
+
+| Sample | Population | Missingness | Category |
+|---|---|---|---|
+| SUS5 | USA | 99.95% | Essentially absent |
+| MUS113 | USA | 99.76% | Essentially absent |
+| CZE10 | EEU | 99.55% | Essentially absent |
+| MUS114 | USA | 98.15% | Essentially absent |
+| DEU8 | WEU | 87.86% | Severely limited |
+| CHN11 | CHI | 60.13% | Severely limited |
+| SUS66 | USA | 53.34% | Severely limited |
+| WUS7 | USA | 38.75% | Poor |
+| NLD3 | WEU | 32.16% | Poor |
+| DEU12 | WEU | 29.46% | Poor |
+| SVK1 | EEU | 20.31% | Marginal |
+
+**Per-population impact:**
+
+| Population | Nominal n | Effective n | Samples >20% Missing |
+|---|---|---|---|
+| CHI | 5 | ~3.3 | 1 (CHN11) |
+| EEU | 18 | ~16.3 | 1 (CZE10) |
+| WEU | 25 | ~21.3 | 3 (DEU8, NLD3, DEU12) |
+| USA | 40 | ~33.2 | 5 (SUS5, MUS113, MUS114, SUS66, WUS7) |
+
+**CHI population detail:** CHN104 (2.8%), CHN12 (3.3%), CHN59 (4.2%), CHN (12.7%), CHN11 (60.1%). Effective sample size ~3.3, which is critical for all CHI-based analyses.
+
+**Decision pending:** Whether to exclude high-missingness samples and whether to re-run earlier analyses. See handoff file Section 3.2 for options under consideration.
+
+---
+
+# 5. Development Roadmap
+
+| Phase | Description | Status | Key Deliverables |
+|---|---|---|---|
+| 1 | Population diversity (Tajima's D, pi) | Complete | Per-population diversity estimates, demographic hierarchy |
+| 2 | Population differentiation (FST) | Complete | Genome-wide and windowed FST for all 6 comparisons |
+| 3 | Selection scan | In progress | Unified percentile outliers (done), pcadapt (pending) |
+| 4 | Gene annotation and functional analysis | Pending revamp | Three-tier BLAST cascade, updated GO enrichment |
+| 5 | Manuscript preparation | Not started | Methods, results, discussion drafts |
+
+---
+
+# 6. Known Limitations and Caveats
+
+**Small CHI reference population.** With effective n ~ 3.3, CHI-specific estimates (Tajima's D, pi, allele frequencies) have high variance. This affects all CHI-vs-invasive comparisons. The MAF filter further reduces the set of CHI-informative variants.
+
+**Percentile threshold arbitrariness.** The unified percentile approach provides methodological consistency but lacks formal FDR control. The 1% threshold is a convention, not a statistical significance boundary. Cross-threshold validation (0.5%, 1%, 2%) and cross-method validation (OutFLANK, pcadapt) partially address this.
+
+**Demographic-selection confounding in CHI-vs-invasive comparisons.** Invasion bottlenecks create genome-wide allele frequency shifts that are indistinguishable from selection at individual loci. The INVASION_SPECIFIC pattern category is therefore a mixture of demographic and selective effects. POST_INVASION outliers are the cleanest selection signal because they compare populations that share the bottleneck history.
+
+**Non-model organism annotation.** Even with the BLAST cascade achieving 100% gene mapping, annotation confidence degrades with phylogenetic distance. Tier 2 and Tier 3 annotations should be treated as hypotheses requiring functional validation.
+
+**Windowed analysis resolution.** The 5kb window size means selection signals narrower than 5kb may be diluted, and signals at window boundaries may be split across adjacent windows. SNP-level methods (OutFLANK, pcadapt) complement the windowed approach by detecting individual loci.
+
+**Missing data heterogeneity.** 11 samples have >20% missingness. While VCF-level filtering excluded the worst-affected SNPs, remaining SNPs may still have biased allele frequency estimates at sites where high-missingness individuals are missing. This is especially concerning for CHI (n=5, effective n ~ 3.3).
+
+---
+
+# 7. References and Resources
+
+## 7.1 Key Papers
+
+- Weir BS, Cockerham CC (1984) Estimating F-statistics for the analysis of population structure. *Evolution* 38:1358-1370.
+- Lotterhos KE, Whitlock MC (2014) Evaluation of demographic history and neutral parameterization on the performance of FST outlier tests. *Molecular Ecology* 23:2178-2192.
+- Luu K, Bazin E, Blum MGB (2017) pcadapt: an R package to perform genome scans for selection based on principal component analysis. *Molecular Ecology Resources* 17:67-77.
+- Bonhomme M et al. (2010) Detecting selection in population trees: the Lewontin and Krakauer test extended. *Genetics* 186:241-262.
+- Danecek P et al. (2011) The variant call format and VCFtools. *Bioinformatics* 27:2156-2158.
+
+## 7.2 External Tools and Databases
+
+| Resource | Purpose | Notes |
+|---|---|---|
+| vcftools v0.1.16 | VCF manipulation, diversity, FST | Weir & Cockerham estimator |
+| PLINK v1.9 | Genotype format conversion, QC | Required for pcadapt input |
+| OutFLANK (R) | FST outlier detection | Validation method for among-invasive |
+| pcadapt (R) | PCA-based outlier detection | In progress |
+| BLAST+ v2.17.0 | Sequence similarity search | Annotation pipeline |
+| NCBI Gene | Gene annotation database | Direct query for C. septempunctata |
+| FlyBase | D. melanogaster annotation | Planned for Tier 3 BLAST |
+
+## 7.3 Collaborators
+
+| Role | Name | Contact | Contribution |
+|---|---|---|---|
+| Student / Analyst | Reina Hastings | reinahastings13@gmail.com | All analyses and documentation |
+| PI / Advisor | [Name] | [Contact] | Project oversight, methodological guidance |
+
+---
+
+# 8. Instructions for Claude
+
+## 8.1 Core Editing Rules
+
+**This document is a living current-state reference.** All sections (1-7) may be updated in place when new information refines or extends what is already there. Always date significant updates. When updating, preserve existing information and details. If a section needs revision, annotate the change with the date and reason rather than silently overwriting.
+
+**The Decision Register and Development Log live in a separate document** (`ladybug_project_history.Rmd`). New design decisions and development work should be logged there, not here. See Section 9 below.
+
+## 8.2 What Claude Should Always Do
+
+- **Date everything.** Every significant update gets a date.
+- **Document the "why."** Never record a methodological or design choice without its rationale. If the rationale is uncertain, say so explicitly.
+- **Flag uncertainty.** Use language like "tentative," "requires validation," or "assuming X holds" rather than presenting uncertain conclusions as settled.
+- **Flag follow-ups** with a **[FOLLOW-UP NEEDED]** tag.
+- **State limitations proactively** when recording design decisions.
+- **Maintain consistency.** If a decision in the project history contradicts content here, surface the contradiction and update.
+
+## 8.3 What Claude Should Never Do
+
+- **Never silently overwrite content.** Changes and their reasons must be visible.
+- **Never fabricate citations or technical details.** Flag uncertainty rather than stating guesses as fact.
+- **Never omit caveats.** This is an internal development record, not marketing material.
+- **Never assume context not present in this document.** Ask rather than guess.
+
+## 8.4 Tone and Voice
+
+Direct, precise, academic style. No filler, no fluff, no motivational framing. The goal is a record the developer can trust as accurate and complete.
+
+---
+
+# 9. Project History Reference
+
+The Decision Register and Development Log are maintained in `ladybug_project_history.Rmd`. That document is the chronological, append-only record of all significant design decisions and development work.
+
+This separation keeps this document focused on the current state of the project (what the analysis pipeline does and how it works), while the history doc provides the full chronological record of how the project reached that state.
+
+**Document tiers:**
+
+- **This document** (`ladybug_master_doc.Rmd`): Current-state reference.
+- **Project history** (`ladybug_project_history.Rmd`): Chronological record. Decision Register and Development Log.

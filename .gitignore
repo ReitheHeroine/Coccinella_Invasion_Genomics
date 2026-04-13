@@ -1,1 +1,15 @@
+# macOS
 .DS_Store
+
+# Analysis outputs (regenerable)
+results/
+data/
+
+# R session files
+.Rhistory
+.RData
+.Rproj.user/
+
+# Temporary files
+*.log
+*.tmp

@@ -1,0 +1,122 @@
+---
+title: "Ladybug PopGen -- Session Log"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+    toc_depth: 3
+    theme: default
+---
+
+# Ladybug PopGen -- Session Log
+
+**Purpose:** Append-only record of work done in each Claude session. New entries go at the top (reverse chronological), immediately after the `# Active Session Log` header. Claude Code prepends entries at session end via the flush procedure in the handoff file.
+
+**When to read this file:** When catching up on recent implementation work, reviewing what changed, or looking for detailed test results and bug fix context. Claude Code reads only the first ~20 lines when appending a new entry.
+
+**File rotation:** When this file grows large, start a new file with a date or phase suffix (e.g., `ladybug_session_log_phase2.Rmd`). Do not delete old session log files.
+
+---
+
+### Entry Template
+
+> ### [DATE] ([Claude Code / Claude.ai])
+> - [What was done]
+> - [Key outputs generated with file paths]
+> - [Tests run and outcomes]
+> - [Decisions made -- flag for promotion to Project History Decision Register if significant]
+> - [Issues encountered or flagged]
+
+---
+
+# Active Session Log
+
+### 2026-01-13 (Claude Code -- PLINK merge and sample QC)
+
+**PLINK Conversion:**
+- Converted per-chromosome filtered VCFs to PLINK binary format
+- Used `--set-missing-var-ids '@:#'` to fix variant ID collisions (all VCF IDs were `.`)
+- Result: 803,821 variants x 88 individuals, 87.4% genotyping rate
+- Output: `data/plink/ladybug_snps.bed/bim/fam`
+
+**Sample Quality Validation:**
+- Ran `plink --bfile data/plink/ladybug_snps --allow-extra-chr --missing --out data/plink/ladybug_snps_qc`
+- Found 11 individuals >20% missingness (not just 2 as initially flagged)
+- 4 samples essentially absent (>98%): SUS5, MUS113, CZE10, MUS114
+- 3 samples severely limited (50-90%): DEU8, CHN11, SUS66
+- CHN11 (CHI, 60.1%) reduces effective CHI n to ~3.3
+- Full table in master doc Section 4.2
+
+**Script Refactoring:**
+- fst.sh: 851 -> 165 lines (removed summary generation and biological interpretations)
+- Created summarize_fst.R (~220 lines) for cumulative reporting
+- Usage: `./fst.sh -i <vcf_dir> -p1 <pop1> -p2 <pop2>` then `Rscript summarize_fst.R ../results`
+- **Decision for history:** Removed biological interpretations from scripts -- flag for Decision Register
+
+**Status:** PLINK files ready. Blocked on user decision re: sample exclusion before pcadapt.
+
+### 2026-01-13 (Claude.ai -- troubleshooting session)
+
+**pcadapt failure diagnosis:**
+- Root cause: `type='pool'` in pcadapt expects allele frequencies (0.0-1.0), not individual genotypes (0/1/2)
+- Fix: Use `type='bed'` with PLINK binary files
+
+**PLINK merge failure diagnosis:**
+- Root cause: VCF variant IDs all `.` -- PLINK treats all as same variant during merge
+- Fix: `--set-missing-var-ids '@:#'` creates unique CHROM:POS IDs
+
+**Clarifications documented:**
+- WG_VARIANTS is UNFILTERED -- must use per-chromosome filtered VCFs
+- Window vs SNP level concordance: methods measure different things, low concordance expected even if both correct
+- Conda in non-interactive bash: `source /Users/reina/miniconda3/etc/profile.d/conda.sh && conda activate pop_gen`
+
+**Environment notes:**
+- PLINK v1.9 confirmed in pop_gen conda environment
+- pcadapt R package installed
+- bcftools NOT installed in pop_gen (needed for VCF merging -- not needed after PLINK approach adopted)
+
+### 2026-01-12 (Claude Code -- concordance validation)
+
+- 12:30 -- Session started. Read handoff and project notes.
+- 12:32 -- Fixed SNP ID format in `outflank_diagnostic.R` line 351: changed from `SNP_#` to `CHROM:POS` format
+- 12:34 -- Created `scripts/calculate_outflank_concordance.R`
+- 12:34 -- Re-ran `outflank_diagnostic.R` on all 6 comparisons (~13 minutes). Results consistent with previous run.
+- 12:47 -- Ran concordance calculation:
+  - EEU vs WEU: 3.11% concordance (39 windows in both methods, Jaccard 0.025)
+  - EEU vs USA: 3.87% concordance (12 windows in both methods, Jaccard 0.019)
+- 12:48 -- Task completed. Outputs: `results/outflank_diagnostic/concordance/`
+
+### 2026-01-12 (Claude.ai -- interpretation and planning)
+
+- Interpreted concordance results: 3-4% reflects methodological differences (SNP-level vs window-level), not failure
+- Evaluated FLK vs pcadapt: selected pcadapt (tree assumption violated, small CHI n, limited df)
+- Confirmed three-tier BLAST cascade: H. axyridis -> T. castaneum -> D. melanogaster
+- Decided to disaggregate percentile windows to SNPs for proper concordance
+- Determined 66% cross-validation claim was unverifiable -- removed from documentation
+- Created comprehensive pcadapt task specification for Claude Code
+
+### 2026-01-09 (Claude Code -- FST revision, OutFLANK diagnostics, unified scan)
+
+- 11:35 -- Updated handoff file structure. Corrected file system map. Added conda environment docs.
+- 12:00 -- Modified fst.sh: added genome-wide FST (Phase 1, no windowing) alongside existing windowed FST (Phase 2). New output directory: `fst_genomewide/`.
+- 12:15 -- Ran updated fst.sh on all 6 comparisons. Genome-wide weighted FST results:
+  - CHI vs EEU: 0.143 | CHI vs WEU: 0.147 | CHI vs USA: 0.140
+  - EEU vs WEU: 0.006 | EEU vs USA: 0.011 | USA vs WEU: 0.013
+- 13:00 -- Ran plot_fst.r on all 6 comparisons. Generated 66 plots (11 per comparison).
+- 13:35 -- Added `-A` flag to fst.sh for cumulative summary. New outputs: `whole_pop_results/summary/fst_all_comparisons_summary.tsv` and `_report.txt`.
+- 14:26 -- Completed OutFLANK diagnostic on ALL 6 comparisons:
+  - df=2 for all (excellent fit)
+  - CHI vs invasive: 0 outliers (FSTbar ~0.11-0.12)
+  - EEU vs WEU: 2,456 outliers (FSTbar 0.003)
+  - EEU vs USA: 439 outliers (FSTbar 0.009)
+  - USA vs WEU: 0 outliers (FSTbar 0.011)
+  - Outputs: `results/outflank_diagnostic/`
+- 15:01 -- Completed unified percentile scan on all 6 comparisons:
+  - Created `scripts/unified_selection_scan.R`
+  - 0.5%: 993 windows | 1%: 1,963 windows | 2%: 3,922 windows
+  - Pattern categorization: BOTH 18 | INVASION_SPECIFIC 431 | POST_INVASION 845
+  - Confidence: Very High 3 | High 230 | Moderate 199 | Single 862
+  - Outputs: `results/unified_selection_scan/`
+  - Issue: OutFLANK concordance blocked by SNP ID format mismatch (resolved 2026-01-12)

@@ -1,6 +1,0 @@
-FST analysis
-VCF_DIR: ../data/VARIANTS_BY_CHR/FILTERED_CHR_VCFS
-POP1:    ../metadata/pop_Europe.txt
-POP2:    ../metadata/pop_Asia.txt
-WINDOW:  10000
-OUTDIR:  ../results/fst_Eur_vs_Asia

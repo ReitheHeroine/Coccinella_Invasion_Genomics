@@ -1,0 +1,5 @@
+#notes on ldpruning dataset:
+there are still a lot of variants for ADMIXTURE etc. so even though the bim/bam/fam files say admixture ready I would recommend additonal thinning 
+number of SNPs:
+bcftools view -H C7_filtered_ldpruned.vcf.gz | wc -l
+37110919
