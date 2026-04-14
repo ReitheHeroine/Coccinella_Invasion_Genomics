@@ -14,7 +14,7 @@ output:
 
 **Purpose:** Complete directory structure and output locations for the C. septempunctata population genomics project. Use this document when creating or locating files.
 
-**Last Updated:** 2026-04-13
+**Last Updated:** 2026-04-14
 
 ---
 
@@ -68,8 +68,10 @@ data/
 
 ```
 data/plink/
-|-- ladybug_snps.*                        # Whole-genome PLINK set (.bed/.bim/.fam/.log/.nosex)
+|-- ladybug_snps.*                        # Whole-genome PLINK set, 88 samples (.bed/.bim/.fam/.log/.nosex)
 |-- ladybug_snps_qc.*                     # QC outputs (.imiss/.lmiss/.log/.nosex)
+|-- ladybug_snps_pcadapt.*                # Post-exclusion PLINK set, 81 samples (.bed/.bim/.fam/.log/.nosex)
+|-- samples_exclude_pcadapt.txt           # 7 samples excluded (>50% missing)
 |-- chr_NC_0581{89..98}.1.*               # Per-chromosome PLINK sets (.bed/.bim/.fam/.log/.nosex)
 |-- merge_list.txt                        # Merge manifest for PLINK
 ```
@@ -178,8 +180,11 @@ All analysis scripts. Organized below by pipeline stage.
 | `diagnose_zero_outliers.R` | R | Further zero-outlier diagnostics |
 | `visualize_outflank_results.R` | R | Visualization of OutFLANK results |
 | `calculate_outflank_concordance.R` | R | Concordance between OutFLANK and percentile outliers |
-| `pcadapt_selection_scan.R` | R | pcadapt-based genome scan |
-| `unified_selection_scan.R` | R | Merge FST percentile outliers with OutFLANK, categorize patterns |
+| `pcadapt_selection_scan.R` | R | pcadapt-based genome scan (K=2, 81 samples post-exclusion) |
+| `pcadapt_step2_3_checkin.R` | R | K selection (scree plot) and PCA missingness QC (Yi 2022) |
+| `per_snp_selection_scan.R` | R | Per-SNP FST percentile outlier detection with CHI genotype filter |
+| `cross_method_concordance.R` | R | Integrate percentile/OutFLANK/pcadapt outliers; tier assignment |
+| `unified_selection_scan.R` | R | SUPERSEDED. Merge FST percentile outliers with OutFLANK, categorize patterns |
 | `comprehensive_selection_scan.R` | R | Final integration: multi-threshold outliers, annotation, confidence levels, Figure 1 |
 | `merge_selection_metrics.R` | R | Merge selection metrics across methods |
 
@@ -188,13 +193,16 @@ All analysis scripts. Organized below by pipeline stage.
 | Script | Language | Purpose |
 |--------|----------|---------|
 | `annotate_snps.py` | Python | Annotate SNP positions using GFF |
-| `annotate_outliers_local.py` | Python | Local annotation of outlier windows with gene info |
-| `annotate_outliers_with_go.py` | Python | Add GO terms to annotated outliers |
+| `annotate_outliers_local.py` | Python | Local annotation of outlier windows with gene info (Dec 2025 pipeline; superseded for Phase 4 enrichment) |
+| `annotate_outliers_with_go.py` | Python | Add GO terms to annotated outliers (Dec 2025 pipeline; superseded) |
 | `enrich_from_gff.py` | Python | Extract gene info from GFF for enrichment |
 | `enrich_gene_annotations.py` | Python | Gene-level annotation enrichment |
 | `enrich_gene_annotations_local.py` | Python | Local version of gene annotation enrichment |
-| `go_enrichment_analysis.R` | R | GO term enrichment analysis and visualization |
+| `go_enrichment_analysis.R` | R | Dec 2025 GO term enrichment analysis and visualization (superseded by Task 4.3) |
 | `add_fst_to_enriched_snps.R` | R | Append FST values to enriched SNP tables |
+| `snp_to_gene_mapping.R` | R | **Task 4.1** SNP-to-gene mapping. Foreground (n_methods >= 2) and background (testable universe) gene tables; 5 kb flanking window. Output: `results/enrichment/{foreground,background}_genes.tsv`, `snp_to_gene_mapping.tsv`, `snp_gene_summary.txt` |
+| `gene_to_go_mapping.py` | Python | **Task 4.2** Gene-to-GO mapping via Route A (NCBI gene2go direct, taxid 41139) + Route B (two-step BLAST orthology Csep -> Harmonia -> Tribolium). Persistent cross-run cache with MD5-based invalidation; `--force-rebuild` to bypass. Output: `results/enrichment/{gene2go_foreground,gene2go_background,gene_go_cache}.tsv`, `gene_go_cache_meta.txt`, `go_mapping_summary.txt` |
+| `go_enrichment_ora.R` | R | **Task 4.3** (in progress) Pattern-stratified ORA via clusterProfiler::enricher() |
 
 ## 4.6 Miscellaneous
 
@@ -392,13 +400,85 @@ results/whole_pop_results/logs/
 |-- run_outflank_*.log                    # OutFLANK run logs (multiple iterations)
 ```
 
-## 5.6 pcadapt
+## 5.6 Per-SNP Selection Scan
+
+```
+results/per_snp_selection_scan/
+|-- outliers_{0.5,1,2}pct.tsv             # Per-SNP outliers at each threshold (SNP x comparison rows)
+|-- outliers_{0.5,1,2}pct_chifiltered.tsv # CHI genotype count filtered versions
+|-- snp_summary_{0.5,1,2}pct.tsv          # Unique SNP summaries with pattern classification
+|-- snp_summary_{0.5,1,2}pct_chifiltered.tsv  # CHI-filtered SNP summaries
+|-- region_clusters_1pct.tsv              # Outlier SNPs clustered into regions (10kb merge)
+|-- plots/
+|   |-- manhattan_*.png                   # Manhattan plots per comparison and combined
+```
+
+## 5.7 pcadapt
 
 ```
 results/pcadapt/
-|-- screeplot.png                         # Scree plot for K selection
-|-- concordance/                          # pcadapt-OutFLANK concordance (empty or WIP)
+|-- pcadapt_outliers_q05.tsv              # Outliers at q<0.05 (42,288 SNPs)
+|-- pcadapt_outliers_q01.tsv              # Outliers at q<0.01 (30,157 SNPs)
+|-- pcadapt_summary.txt                   # Summary statistics
+|-- step2_3_checkin.txt                   # K selection and missingness QC results
+|-- plots/
+|   |-- screeplot.png                     # Scree plot for K selection
+|   |-- pca_scores_by_pop.png             # PCA scores colored by population
+|   |-- pca_scores_by_missingness.png     # PCA scores colored by missingness (Yi 2022)
+|   |-- manhattan.png                     # Manhattan plot of -log10(p)
+|   |-- qqplot.png                        # Q-Q plot of observed vs expected p-values
 ```
+
+## 5.8 Cross-Method Concordance
+
+```
+results/cross_method_concordance/
+|-- master_candidate_table.tsv            # 54,965 unique autosomal outlier SNPs (all methods)
+|-- concordance_summary.txt               # Full concordance report (metrics, tiers, patterns)
+|-- pcadapt_sex_chrom_outliers.tsv        # 6,407 pcadapt outliers on NC_058189.1 (excluded from concordance)
+|-- plots/
+|   |-- venn_post_invasion.png            # 3-way Venn (Percentile/OutFLANK/pcadapt)
+|   |-- venn_invasion_specific.png        # 2-way Venn (Percentile/pcadapt)
+|   |-- manhattan_tier1.png               # Manhattan highlighting Tier 1 SNPs
+```
+
+## 5.9 Enrichment Pipeline (Phase 4)
+
+```
+results/enrichment/
+|-- # Task 4.1 outputs (snp_to_gene_mapping.R)
+|-- snp_to_gene_mapping.tsv               # Per-SNP gene mapping (genic / flanking / intergenic)
+|-- foreground_genes.tsv                  # 2,648 foreground genes (n_methods >= 2). Cols: gene_id, chrom, gene_start, gene_end, strand, gene_name, ncbi_gene_id, n_outlier_snps, consensus_pattern, detecting_methods, location_type
+|-- background_genes.tsv                  # 11,105 testable-universe genes (any typed SNP within window). Cols: gene_id, chrom, gene_start, gene_end, strand, gene_name, ncbi_gene_id, n_total_snps
+|-- snp_gene_summary.txt                  # Coverage and QC summary for Task 4.1
+|--
+|-- # Task 4.2 outputs (gene_to_go_mapping.py)
+|-- gene2go_foreground.tsv                # Foreground gene -> GO mapping (long format). Cols: gene_id, go_id, go_term, go_ontology (BP/MF/CC), evidence_source (direct / orthology_Tcas_via_Haxy), ortholog_id, blast_identity
+|-- gene2go_background.tsv                # Background gene -> GO mapping, same schema
+|-- gene_go_cache.tsv                     # Persistent cross-run cache. Cache key = gene_id alone; sentinel rows (evidence_source=no_annotation) prevent re-BLAST of confirmed annotation-less genes
+|-- gene_go_cache_meta.txt                # MD5 hashes of the inputs (gene2go, tribolium_gene2go, three protein FASTAs) plus parameters used to build the cache; mismatch triggers full rebuild
+|-- go_mapping_summary.txt                # Coverage by route (A only / B only / both / neither), by ontology, cache hit/miss stats
+|-- logs/
+|   |-- gene_to_go_mapping.log            # Run log for Task 4.2
+|--
+|-- # Task 4.3 outputs (go_enrichment_ora.R, in progress)
+|-- enrichment_results_{pattern}_{ontology}.tsv          # Per-pattern x ontology enrichment (raw)
+|-- enrichment_results_simplified_{pattern}_{ontology}.tsv  # After clusterProfiler::simplify()
+|-- enrichment_summary.txt                # Significant terms per pattern x ontology, gene counts
+|-- enrichment_log.txt                    # Run log
+|-- plots/
+|   |-- dotplot_{pattern}_{ontology}.png
+|   |-- barplot_top_terms_{pattern}.png
+|   |-- comparison_dotplot.png            # compareCluster across patterns (BP only)
+```
+
+```
+data/blast_db/                            # Persistent BLAST DBs for Task 4.2 Route B
+|-- harmonia_axyridis.{phr,pin,psq,...}   # Built from Harmonia protein.faa
+|-- tribolium_castaneum.{phr,pin,psq,...} # Built from Tribolium protein.faa
+```
+
+> **Note (2026-04-14):** `makeblastdb` fails when the output path contains spaces (iCloud root). Workaround: write DBs to `/tmp/blast_db_biol624/` like the prior Dec 2025 script, or run on the cluster. See handoff Blockers section.
 
 ---
 
