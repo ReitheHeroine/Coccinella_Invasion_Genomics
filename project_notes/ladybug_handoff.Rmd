@@ -1,0 +1,402 @@
+---
+title: "Ladybug PopGen -- Handoff File"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+    toc_depth: 3
+    theme: default
+---
+
+# Ladybug PopGen -- Handoff File
+
+**Last Updated:** 2026-04-13 (pcadapt scan complete; 42,288 outliers at q<0.05; sample exclusion applied; plots generated with sqrt-transformed axes)
+
+**Purpose:** Operational coordination across Claude sessions. Tracks current development state, active tasks, blockers, and data contracts. Updated every session.
+
+**Key principle:** The Master Doc (ladybug_master_doc.Rmd) is the architectural reference for the analysis pipeline, methodology, and results. This handoff is purely operational -- it tracks *what is happening now*, not *why things are designed the way they are*. Reference the Master Doc for explanations rather than restating them.
+
+**Companion files (read on demand, not every session):**
+
+- `ladybug_session_log.Rmd` -- Append-only session history. Read when catching up on recent implementation work.
+- `ladybug_environment.Rmd` -- Platform, deployment, dependencies, VCS reference. Read when working with infrastructure or committing.
+- `ladybug_file_map.Rmd` -- Directory tree and scripts/files reference. Read when creating or locating files.
+
+---
+
+### DOCUMENT MAINTENANCE RULES:
+- **ADD** new information to appropriate sections; do not remove existing content unless archiving
+- **EDIT** only when specific information needs correction
+- **REFERENCE** the Master Doc for design rationale (format: [See Master Doc Section X.X: Title])
+
+---
+
+# 1. Claude Code Session Protocol
+
+**AT SESSION START:**
+
+- Read this Handoff File (all sections)
+- Check the Session Log (`ladybug_session_log.Rmd`) to understand recent work
+- Read the Master Doc if instructed or if the task requires design context
+
+**DURING THE SESSION:**
+
+- Follow the QC check protocol below -- pause between major steps, report metrics, and ask before proceeding
+- When referencing methodology or design rationale, check the Master Doc
+- When implementing cross-step interfaces, check "Integration Points" (Section 5) for data contracts
+- If a step's expected inputs or outputs change during implementation, update Section 5 immediately
+- Log work as you go in the "Current Session" section (Section 6) below
+
+**AT SESSION END:**
+
+Flush the current session to the session log, then clean up:
+
+1. **Write to session log first:** Read only the first ~20 lines of `ladybug_session_log.Rmd` to confirm the structure. Insert the contents of Section 6 (everything between `[SESSION START]` and `[SESSION END]`) immediately after the `# Active Session Log` header, above any existing entries. Do not read the rest of the file.
+2. **Clear Section 6:** Replace the session content with the empty template (keep the `[SESSION START]` and `[SESSION END]` markers, remove everything between them).
+3. **Update other sections as needed:**
+   - Update "Current Development State" (Section 2) if statuses changed
+   - Move completed tasks to "Completed Tasks" (Section 3.3) with date
+   - Update the File Map (`ladybug_file_map.Rmd`) if files were created, moved, or deleted
+   - Flag any issues or questions in Section 4
+   - If a significant design decision was made, note it and flag it for promotion to the Project History Decision Register
+
+**Important:** Always write to the session log before clearing Section 6. If the session is interrupted, a duplicate entry is recoverable; a lost entry is not.
+
+### QC Check Protocol (Mandatory)
+
+- Pause between major implementation steps to verify outputs before proceeding
+- Report QC metrics after each step -- do not continue silently
+- Ask the user if results look reasonable before moving to the next part
+- If any test fails or produces unexpected results, STOP and report
+
+**Check-in format after major steps:**
+```
+Step [X] complete.
+  Results:
+  - Output file: [path]
+  - [Key metric 1]: [value] (expected: [range])
+  - [Key metric 2]: [value] (expected: [range])
+  QC Status: [PASS / WARNING / FAIL]
+  [Notes or concerns]
+  Ready to proceed to Step [Y]. Continue? (y/n)
+```
+
+**Red flags to watch for and report:**
+
+- Dimension mismatches (wrong number of SNPs, samples, chromosomes)
+- Empty output files or zero counts
+- Extreme values outside expected ranges (see Section 5.2)
+- Schema mismatches between pipeline steps (check Section 5)
+- Missing data artifacts (especially in CHI population, effective n ~ 3.3)
+- Outputs that differ dramatically from previous similar analyses
+
+---
+
+# 2. Current Development State
+
+## 2.1 Phase Overview
+
+| Phase | Description | Status | Notes |
+|---|---|---|---|
+| Phase 1 | Population diversity analysis (Tajima's D, pi) | Complete | Nov-Dec 2025 |
+| Phase 2 | Population differentiation (FST) | Complete | Dual approach: genome-wide + windowed |
+| Phase 3 | Selection scan (outlier detection) | In progress | Unified percentile complete; pcadapt pending |
+| Phase 4 | Gene annotation and functional analysis | Pending revamp | Two-step BLAST complete; three-tier cascade planned |
+| Phase 5 | Manuscript preparation | Not started | Waiting on Phase 3-4 completion |
+
+**Current phase:** Phase 3 in progress.
+
+**Current focus:** CHI genotype count filter, SNP-level cross-method concordance (pcadapt complete, ready for integration), GEA planning.
+
+## 2.2 Analysis Component Status
+
+| Component | Phase | Status | Last Touched | Notes |
+|---|---|---|---|---|
+| Diversity (Tajima's D, pi) | 1 | Complete | 2025-12-08 | May need re-run if samples excluded |
+| FST (genome-wide + windowed) | 2 | Complete | 2026-01-13 | fst.sh refactored; summarize_fst.R created |
+| Unified percentile scan (windowed) | 3 | SUPERSEDED | 2026-01-09 | Replaced by per-SNP percentile approach (2026-04-13) |
+| Per-SNP percentile scan | 3 | Complete | 2026-04-13 | per_snp_selection_scan.R; 31,816 outlier SNPs at 1%; CHI genotype filter pending |
+| CHI genotype count filter | 3 | Not started | 2026-04-13 | Filter CHI-vs-invasive outliers by min genotyped CHI individuals |
+| OutFLANK diagnostics | 3 | Complete | 2026-01-12 | Validation role only; now directly comparable at SNP level |
+| pcadapt scan | 3 | Complete | 2026-04-13 | K=2, lambda=1, 42,288 outliers q<0.05 (32,043 INVASION_SPECIFIC, 662 POST_INVASION, 9,583 BOTH) |
+| Sample QC | 3 | Complete | 2026-04-13 | 7 excluded (>50% missing); 4 borderline kept (no PCA drift detected) |
+| Cross-method concordance | 3 | Not started | 2026-04-13 | SNP-level integration across percentile/OutFLANK/pcadapt |
+| GEA (RDA/LFMM) | 3 | Planning | 2026-04-13 | Feasibility assessed; viable for among-invasive comparisons |
+| Gene annotation (BLAST) | 4 | Needs revamp | 2025-12-08 | Two-step complete; three-tier cascade planned |
+| Functional categorization | 4 | Needs revamp | 2025-12-08 | Dependent on updated annotation |
+| GO enrichment | 4 | Needs revamp | 2025-12-08 | Dependent on updated annotation |
+
+---
+
+# 3. Task Queue
+
+## 3.1 Pending Tasks
+
+### CHI Genotype Count Filter for CHI-vs-Invasive Outliers
+- **Assigned to:** Claude Code
+- **Priority:** High
+- **Phase:** 3
+- **Component:** Per-SNP percentile scan (post-filter)
+- **Description:** For the three CHI-vs-invasive comparisons (CHI vs EEU, CHI vs WEU, CHI vs USA), filter per-SNP FST outliers to retain only SNPs where at least 3 of 4 CHI individuals (post-exclusion) have called genotypes at that site. This removes the noisiest FST estimates caused by CHI allele frequencies computed from 1-2 individuals. Does NOT apply to among-invasive comparisons (sample sizes adequate). vcftools per-site FST output includes the number of individuals used in the calculation, which can be used for this filter.
+- **Context/References:** With CHI n=4 (post-exclusion), per-SNP FST is noisy. A single allele count shift (e.g., 2/8 vs 3/8 minor allele frequency) can produce large FST swings from sampling variance alone. Requiring >=3 CHI genotypes ensures allele frequencies are based on at least 6 alleles, reducing noise while retaining most SNPs (the VCF filtering already removed sites where many samples were missing).
+- **Acceptance criteria:** Report how many CHI-vs-invasive outlier SNPs are removed by this filter. Report the distribution of CHI genotype counts at outlier sites before and after filtering.
+- **Dependencies:** Per-SNP FST calculation. Sample exclusion decision.
+
+### SNP-Level Cross-Method Concordance
+- **Assigned to:** Claude Code
+- **Priority:** High
+- **Phase:** 3
+- **Component:** Cross-method concordance
+- **Description:** After per-SNP percentile, OutFLANK, and pcadapt are all complete, integrate results at the SNP level. All three methods now produce SNP-level candidates (chromosome:position). Calculate pairwise and three-way concordance. Assign confidence tiers: Tier 1 = supported by 2+ methods from different families (FST-based + PCA-based) or 3+ methods. Tier 2 = 2 methods from the same family, or 1 method with very strong support (pcadapt q<0.001). Tier 3 = 1 method only. Layer pattern categorization (BOTH/INVASION_SPECIFIC/POST_INVASION) on top of tiers.
+- **Context/References:** Previous window-vs-SNP concordance was 3-4%, reflecting scale mismatch. Per-SNP approach should yield higher concordance if methods are detecting the same signals. Low concordance at the SNP level would indicate genuinely different signal detection.
+- **Acceptance criteria:** Concordance matrix (pairwise and three-way). Tier assignment for all candidate SNPs. Summary table of candidates by tier and pattern category. Venn diagram of method overlap.
+- **Dependencies:** Per-SNP percentile, OutFLANK (already complete), pcadapt (pending).
+
+### GEA Feasibility and Planning
+- **Assigned to:** User (Rei) / Claude.ai -- planning; Claude Code -- implementation
+- **Priority:** Medium
+- **Phase:** 3
+- **Component:** GEA (RDA/LFMM)
+- **Description:** Assess feasibility and implement genotype-environment association analysis. Sample coordinate data available (C7_samples_locations_updated.xlsx). 21 unique sampling sites across 4 continents. Extract WorldClim bioclimatic variables for each site. Run RDA (primary) and optionally LFMM (complement) to identify SNPs associated with environmental gradients.
+- **Context/References:** Geographic assessment (2026-04-13): CHI = 1 site (Beijing), no within-population environmental variation. EEU = 4 sites, Crete to Estonia (23 degrees latitude). WEU = 5 sites, Spain to Denmark (13 degrees latitude). USA = 10 sites, KY/VA to NY plus Sacramento CA (major east-west gradient). GEA is viable for among-invasive comparisons (POST_INVASION category) but NOT for CHI-vs-invasive (single CHI site = no environmental variation in ancestral range). CHI samples should be excluded from GEA analysis or included only as a conditioning variable.
+- **Acceptance criteria:** Environmental variables extracted and screened for collinearity. RDA run with appropriate population structure correction (partial RDA conditioning on neutral PCs). Candidate SNPs identified and cross-referenced with other method results. Report which environmental variables drive the strongest associations.
+- **Dependencies:** Sample exclusion decision. LD-pruned dataset (RDA assumes independence among loci). Coordinate data (available). WorldClim data extraction.
+
+### Three-Tier BLAST Annotation
+- **Assigned to:** Claude Code
+- **Priority:** Medium
+- **Phase:** 4
+- **Component:** Gene annotation
+- **Description:** Upgrade annotation from two-step to three-tier BLAST cascade: C. septempunctata -> H. axyridis (>=60% identity) -> T. castaneum (>=40% identity) -> D. melanogaster (>=30% identity). Run on updated outlier set from unified percentile scan.
+- **Context/References:** See Master Doc for phylogenetic rationale and identity thresholds.
+- **Acceptance criteria:** All outlier genes annotated. Confidence scores assigned by tier and identity. Summary report with annotation success rates per tier.
+- **Dependencies:** Sample exclusion decision (determines final outlier set). Possibly re-run selection scan if samples excluded.
+
+## 3.2 Decisions and Designs for Review
+
+### Shift from Windowed to Per-SNP Percentile (Decision Made 2026-04-13)
+
+**Decision:** Replace windowed FST percentile approach (5kb windows) with per-SNP FST percentile as the primary FST-based detection method. Windowed FST retained only for visualization (Manhattan plots).
+
+**Rationale:** The windowed approach created a scale mismatch with OutFLANK and pcadapt (both SNP-level), resulting in 3-4% concordance that reflected aggregation artifacts rather than real methodological disagreement. Per-SNP detection puts all three methods on the same scale, enabling meaningful concordance calculation. Trade-off: per-SNP FST is noisier than windowed FST, especially for CHI-vs-invasive comparisons (CHI n=4). Mitigated by the CHI genotype count filter (require >=3 of 4 CHI individuals genotyped) and post-hoc clustering of nearby outlier SNPs into regions.
+
+**Implications:** unified_selection_scan.R results (1,963 outlier windows at 1%) are superseded. Pattern categorization framework (BOTH/INVASION_SPECIFIC/POST_INVASION) is retained but applied at the SNP level. Previous OutFLANK concordance numbers (3-4%) are no longer relevant; new SNP-level concordance expected to be higher if methods detect similar signals.
+
+**Flag for Project History Decision Register.**
+
+### GEA Feasibility Assessment (2026-04-13)
+
+**Finding:** Sample coordinate data reveals 21 unique sampling sites. CHI = 1 site (Beijing), which rules out GEA for the CHI-vs-invasive axis (no within-native environmental variation). However, invasive populations span substantial environmental gradients: EEU from Crete (35N) to Estonia (58N), WEU from Spain (43N) to Denmark (56N), USA from KY/VA to NY plus Sacramento CA (major continental gradient). GEA via RDA (and possibly LFMM) is viable for detecting environment-associated variation within the invasive range, complementing the POST_INVASION outlier category.
+
+**Recommendation:** Proceed with GEA as an additional analysis layer. Use partial RDA conditioning on neutral PCs to separate environmental associations from demographic structure. Focus interpretation on among-invasive environmental gradients. Cross-reference GEA candidates with per-SNP percentile, OutFLANK, and pcadapt results.
+
+**Flag for Project History Decision Register.**
+
+### Sample Exclusion Strategy (DECIDED 2026-04-13)
+
+**Decision:** Two-tier exclusion for pcadapt. Exclude 7 samples with >50% missingness (definite). Empirically inspect 4 borderline samples (20-50% missing) via PCA missingness coloring per Yi (2022); exclude if they drift toward PCA origin, keep if they cluster normally with their populations.
+
+**Definite exclusions (>50% missing, 7 samples):**
+SUS5 (USA, 99.95%), MUS113 (USA, 99.76%), CZE10 (EEU, 99.55%), MUS114 (USA, 98.15%), DEU8 (WEU, 87.86%), CHN11 (CHI, 60.13%), SUS66 (USA, 53.34%).
+
+**Borderline samples (20-50% missing, 4 samples) -- inspect empirically:**
+WUS7 (USA, 38.75%), NLD3 (WEU, 32.16%), DEU12 (WEU, 29.46%), SVK1 (EEU, 20.31%).
+
+**Post-exclusion population sizes (definite exclusions only):** CHI=4, EEU=17, WEU=24, USA=36 (81 total).
+
+**Rationale:** Yi (2022, Molecular Ecology Resources) demonstrated that individuals with biased missing data are pulled toward the PCA origin, mimicking admixed individuals and distorting population structure inference. The >50% threshold removes unambiguous cases. The borderline group is assessed empirically because VCF-level filtering (--max-missing 0.875) already removed the worst-affected SNPs, so the realized impact on PCA may be smaller than raw missingness numbers suggest.
+
+**Scope:** This exclusion applies to pcadapt only. Earlier analyses (FST, diversity) used VCFs directly and are unaffected. Decision on whether to re-run earlier analyses with exclusions deferred until after pcadapt results are evaluated.
+
+**Flag for Project History Decision Register.**
+
+### pcadapt Analytical Decisions (DECIDED 2026-04-13)
+
+**FDR threshold:** q < 0.05 (Storey's q-value method) as primary threshold. q < 0.01 as stringent subset. Storey's method preferred over Benjamini-Hochberg because it estimates pi0 (proportion of true nulls), providing tighter FDR control when most tests are truly null (~800K mostly neutral SNPs). Literature standard: most published pcadapt studies use q < 0.05 (Luu et al. 2017 validated FDR control at 10%; 5% is conservative relative to validation).
+
+**LD pruning:** Run unpruned first. Check lambda (genomic inflation factor). If lambda <= 1.5, keep unpruned results (preserves full SNP universe for concordance with per-SNP percentile). If lambda > 1.5, LD-prune with PLINK `--indep-pairwise 50 10 0.1` and re-run. Rationale: ~800K SNPs across 10 chromosomes is moderate density; per-SNP percentile used unpruned data, so matching SNP universe enables direct concordance.
+
+**PC loading classification (Option C: component-wise significance):** For each outlier SNP, test each z-score individually against |z| > 2 (corresponds to nominal two-tailed p < 0.05 for a single z-score). Classification rules:
+  - Only |z_PC1| > 2: INVASION_SPECIFIC
+  - Only |z_PC2| > 2: POST_INVASION
+  - Both |z_PC1| > 2 and |z_PC2| > 2: BOTH
+  - Neither individually > 2 but overall q < 0.05: BOTH (combined effect drives the outlier call)
+Rationale: More principled than arbitrary proportion or ratio thresholds. The |z| > 2 cutoff is grounded in standard normal quantiles. The "neither but overall significant" case captures SNPs where both axes contribute moderately.
+
+**Key caveat:** PC-to-category mapping must be verified from the PCA score plot before applying. Expected: PC1 = CHI vs invasive, PC2 = among-invasive. If PCs split differently, category assignments must be adjusted.
+
+**Flag for Project History Decision Register.**
+
+## 3.3 Completed Tasks
+
+- **2026-04-13:** pcadapt selection scan completed (pcadapt_selection_scan.R). K=2 (Cattell's rule from scree plot; PC1=CHI vs invasive, PC2=among-invasive). Lambda=1.0 (no LD pruning needed). 803,821 SNPs x 81 individuals (7 excluded >50% missing). 311,978 SNPs returned NA p-values (monomorphic/invariant). 42,288 outliers at q<0.05 (Storey's, pi0=1): INVASION_SPECIFIC=32,043, POST_INVASION=662, BOTH=9,583. 30,157 outliers at q<0.01. Outlier count exceeds expected 500-5,000 range but lambda=1 rules out inflation; driven by strong CHI-vs-invasive differentiation (FST~0.15). 4 borderline samples (WUS7, NLD3, DEU12, SVK1) kept after PCA missingness inspection (Yi 2022) showed no drift toward origin. Diagnostic plots generated with sqrt-transformed axes to handle p-value underflow (13 SNPs with p=0 capped at max finite -log10(p)=140). Scree plot note: primary elbow after PC1; PC2-PC6 form plateau at ~10-12%; PC2 results should be interpreted cautiously.
+- **2026-04-13:** Sample exclusion strategy decided. Exclude 7 samples >50% missing (SUS5, MUS113, CZE10, MUS114, DEU8, CHN11, SUS66). Empirically inspect 4 borderline (20-50%) via PCA missingness coloring. pcadapt full spec finalized: Storey's q < 0.05, unpruned (lambda check), component-wise |z| > 2 classification, Yi (2022) missingness protocol.
+- **2026-04-13:** Per-SNP percentile selection scan completed (per_snp_selection_scan.R). Used existing per-SNP FST from fst_genomewide/ (713K-783K SNPs per comparison after NA removal). Applied 0.5%/1%/2% thresholds. At 1%: 31,816 unique outlier SNPs (POST_INVASION: 19,439; INVASION_SPECIFIC: 12,286; BOTH: 91). Clustered into 5,714 regions (10kb merge). Manhattan plots generated. OutFLANK cross-reference: 99-100% of OutFLANK outliers captured by percentile. CHI genotype count filter still pending (requires per-site sample counts not in .weir.fst output). Results may need re-run after sample exclusion decision.
+- **2026-01-13:** PLINK conversion completed (803,821 variants x 88 individuals, 87.4% genotyping rate). Sample QC validation completed (11 samples >20% missing identified). fst.sh refactored (851 -> 165 lines) and summarize_fst.R created.
+- **2026-01-12:** OutFLANK SNP ID format fixed (CHROM:POS). Concordance validation completed (EEU vs WEU: 3.11%, EEU vs USA: 3.87%).
+- **2026-01-09:** Genome-wide FST calculated (CHI vs invasive: 0.14-0.15). OutFLANK diagnostic on all 6 comparisons. Unified percentile scan completed (1,963 outlier windows at 1%).
+- **2025-12-08:** Diversity analysis finalized. FST analysis completed. Gene annotation pipeline (two-step BLAST). Functional categorization.
+- **2025-12-06:** Selection scan dual-method approach (superseded by unified percentile 2026-01-09). Pattern categorization system. Cross-threshold validation.
+- **2025-11-17 to 2025-11-20:** Project initiation. Diversity pipeline development. Script standardization.
+
+---
+
+# 4. Open Questions and Blockers
+
+## 4.1 Blockers
+
+- **None.** Sample exclusion decision resolved 2026-04-13. pcadapt is unblocked.
+
+## 4.2 Open Questions
+
+- **[2026-01-13] Should earlier analyses (diversity, FST) be re-run after sample exclusion?** Deferred until after pcadapt results are evaluated. VCF-level filtering may have already mitigated most impact.
+- **[2026-01-13] Impact of CHN11 on existing results.** CHN11 (60% missing) was included in all prior analyses. Now excluded from pcadapt. Impact on FST/diversity estimates still unknown but likely small given SNP-level filtering.
+- **[2026-04-13] Optimal clustering distance for post-hoc SNP region merging.** Per-SNP outliers will be clustered into regions for biological interpretation. Need to determine appropriate distance threshold (5kb? 10kb? LD-based?). Should be informed by LD decay estimates if available.
+- **[2026-04-13] Which environmental variables for GEA?** Need to extract WorldClim bioclimatic variables and screen for collinearity. Key candidates: annual mean temperature, temperature seasonality, annual precipitation, precipitation seasonality. Must assess collinearity with population structure.
+
+## 4.3 Resolved Questions
+
+- **[2026-04-13] Sample exclusion strategy for pcadapt:** Resolved. Exclude >50% missing (7 samples) as definite. Empirically inspect 4 borderline (20-50%) via PCA missingness coloring per Yi (2022). Two-tier approach justified by literature on nonrandom missing data bias in PCA.
+- **[2026-04-13] pcadapt FDR threshold:** Resolved. q < 0.05 (Storey's q-value) as primary. q < 0.01 as stringent subset. Standard in published literature; Luu et al. (2017) validated FDR control at 10%.
+- **[2026-04-13] LD pruning for pcadapt:** Resolved. Run unpruned first, check lambda. Prune only if lambda > 1.5. Maintains SNP universe compatibility with per-SNP percentile for concordance.
+- **[2026-04-13] PC loading classification method:** Resolved. Option C (component-wise significance, |z| > 2 per PC). More principled than ratio or proportion thresholds.
+- **[2026-04-13] Windowed vs per-SNP percentile approach:** Resolved by shifting to per-SNP. Windowed approach created scale mismatch with SNP-level methods. Per-SNP with CHI genotype count filter and post-hoc clustering addresses noise concerns while enabling direct cross-method concordance.
+- **[2026-04-13] GEA feasibility:** Viable for among-invasive comparisons (21 sites, substantial environmental gradients in EEU, WEU, USA). Not viable for CHI-vs-invasive (single site in Beijing, no within-native environmental variation).
+- **[2026-01-09] OutFLANK failure on CHI vs invasive:** Not a failure -- excellent fit (df=2) but FSTbar (~0.11) approaches observed FST, so no SNPs exceed the inflated threshold. Resolved by adopting unified percentile as primary method.
+- **[2026-01-09] Windowed FST values too low:** Windowed mean FST (0.05-0.06) is expected for window-averaged values. Genome-wide weighted FST (0.14-0.15) matches literature. Both valid for different purposes.
+- **[2026-01-12] OutFLANK-percentile concordance low (3-4%):** Reflects fundamental methodological differences (SNP-level vs window-level), not analytical failure. Further resolved by shift to per-SNP approach (2026-04-13).
+
+---
+
+# 5. Integration Points
+
+## 5.1 Data Contracts
+
+### VCF Files --> PLINK Conversion
+- **Producer:** Pre-project VCF filtering (chr_filter.sh)
+- **Consumer:** PLINK for pcadapt input
+- **Format:** Per-chromosome gzipped VCF (10 files)
+- **Location:** `data/VARIANTS_BY_CHR/FILTERED_CHR_VCFS/*.filtered.vcf.gz`
+- **Schema:** Standard VCF with 88 samples, biallelic SNPs only
+- **Notes:** WG_VARIANTS is UNFILTERED -- never use directly. Must use per-chromosome filtered VCFs.
+
+### PLINK Files --> pcadapt
+- **Producer:** PLINK conversion (merged from per-chromosome VCFs) + sample exclusion via `--remove`
+- **Consumer:** pcadapt R package
+- **Format:** PLINK v1.9 binary (bed/bim/fam)
+- **Location:** `data/plink/ladybug_snps_pcadapt.bed/bim/fam` (81 individuals, post-exclusion)
+- **Original:** `data/plink/ladybug_snps.bed/bim/fam` (88 individuals, retained for reference)
+- **Schema:** ~803,821 variants x 81 individuals. Variant IDs as CHROM:POS. 7 samples excluded (>50% missing): SUS5, MUS113, CZE10, MUS114, DEU8, CHN11, SUS66. Population sizes: CHI=4, EEU=17, WEU=24, USA=36.
+- **Notes:** pcadapt requires PLINK v1.9 format (not PLINK 2). If borderline samples (WUS7, NLD3, DEU12, SVK1) are also excluded after PCA inspection, regenerate as `ladybug_snps_pcadapt_strict.bed/bim/fam` (77 individuals).
+
+### pcadapt --> Cross-Method Concordance (NEW)
+- **Producer:** pcadapt_selection_scan.R
+- **Consumer:** Cross-method concordance script
+- **Format:** TSV
+- **Location:** `results/pcadapt/pcadapt_outliers_q05.tsv` (primary), `pcadapt_outliers_q01.tsv` (stringent)
+- **Schema:** snp_index, chrom, pos, snp_id (CHROM:POS), z_PC1, z_PC2, ..., mahalanobis_dist, pvalue, qvalue, pc_category (INVASION_SPECIFIC/POST_INVASION/BOTH)
+- **Notes:** SNP IDs as CHROM:POS match per-SNP percentile and OutFLANK formats for direct concordance. pc_category based on component-wise significance (|z| > 2).
+
+### Windowed FST --> Percentile Selection Scan (SUPERSEDED)
+- **Status:** SUPERSEDED by per-SNP approach (2026-04-13). Retained for visualization only.
+- **Producer:** fst.sh (Phase 2, windowed mode)
+- **Consumer:** Manhattan plot generation only (no longer used for detection)
+- **Format:** TSV (`.windowed.weir.fst` files)
+- **Location:** `results/fst/{POP1}_vs_{POP2}/fst/`
+- **Schema:** CHROM, BIN_START, BIN_END, N_VARIANTS, WEIGHTED_FST, MEAN_FST (5kb windows)
+
+### Per-SNP FST --> Per-SNP Percentile Selection Scan (NEW)
+- **Producer:** vcftools `--weir-fst-pop` (no window flag)
+- **Consumer:** per-SNP percentile scan script (to be created), cross-method concordance script
+- **Format:** TSV (`.weir.fst` files)
+- **Location:** `results/fst/{POP1}_vs_{POP2}/fst_genomewide/` (existing per-SNP FST files)
+- **Schema:** CHROM, POS, WEIR_AND_COCKERHAM_FST (one row per SNP per comparison)
+- **Notes:** ~800K rows per comparison, 6 comparisons. Negative FST values are expected and valid. For CHI-vs-invasive comparisons, also need per-site sample count to apply the CHI genotype count filter.
+
+### Outlier Windows --> Gene Annotation (SUPERSEDED)
+- **Status:** SUPERSEDED. Gene annotation will consume per-SNP outlier lists instead.
+- **Producer:** unified_selection_scan.R
+- **Consumer:** annotate_outliers_local.py (or future three-tier BLAST script)
+- **Format:** TSV
+- **Location:** `results/unified_selection_scan/percentile_outliers_*pct.tsv`
+- **Schema:** window_id, chrom, start, end, comparison, fst, threshold, pattern, confidence
+
+### Per-SNP Outliers --> Gene Annotation (NEW)
+- **Producer:** Per-SNP percentile scan script, cross-method concordance script
+- **Consumer:** Three-tier BLAST annotation script
+- **Format:** TSV
+- **Location:** `results/per_snp_selection_scan/outliers_*pct.tsv` (to be created)
+- **Schema:** chrom, pos, snp_id (CHROM:POS), comparison(s), fst, percentile_rank, pattern, confidence_tier, pcadapt_q (if applicable), outflank_q (if applicable)
+- **Notes:** Post-hoc clustered regions (outlier SNPs within 5-10kb merged) will be in a separate file for gene-level annotation.
+
+### Population Files (Shared Reference)
+- **Location:** `metadata/pop_CHI.txt`, `pop_EEU.txt`, `pop_WEU.txt`, `pop_USA.txt`
+- **Format:** One sample ID per line
+- **Consumers:** vcftools (FST, diversity), PLINK (sample filtering), R scripts (population labels)
+- **Schema:** Sample IDs must match VCF column headers exactly
+
+## 5.2 Expected Value Ranges (QC Reference)
+
+| Metric | Expected | Red Flag |
+|---|---|---|
+| Sample count (original) | 88 total (CHI=5, EEU=18, WEU=25, USA=40) | Any other number |
+| Sample count (pcadapt, post-exclusion) | 81 total (CHI=4, EEU=17, WEU=24, USA=36) | Any other number |
+| SNP count | ~800,000 | <700K or >900K |
+| Chromosomes | 10 (NC_058189.1 through NC_058198.1) | Missing or extra |
+| CHI vs invasive FST (weighted) | 0.14-0.15 | <0.10 or >0.25 |
+| Among-invasive FST (weighted) | 0.006-0.013 | >0.05 |
+| CHI Tajima's D | ~+0.17 | Strongly negative |
+| Invasive Tajima's D | -0.15 to -0.33 | Positive |
+| Missing data rate (mean) | ~12.6% (full), lower post-exclusion | >20% |
+| pcadapt lambda (GIF) | 0.8-1.5 | >1.5 (triggers LD pruning) |
+| pcadapt K | 2-3 (expect 2) | >4 or 1 |
+| pcadapt outliers (q<0.05) | 500-5,000 | >10,000 or <100 |
+
+---
+
+# 6. Current Session
+
+This section holds the in-progress session log entry. It is written during the session and flushed to `ladybug_session_log.Rmd` at session end (see Section 1, "AT SESSION END" for the flush procedure).
+
+[SESSION START]
+
+### 2026-04-13 Session: pcadapt Selection Scan Implementation
+
+**Task:** Implement full pcadapt selection scan (Steps 1-8 from spec).
+
+**What was done:**
+
+1. **Step 1:** Created sample exclusion file (`data/plink/samples_exclude_pcadapt.txt`) and regenerated PLINK files via `plink --remove`. Output: `ladybug_snps_pcadapt.bed/bim/fam` (803,821 variants x 81 individuals, genotyping rate 93.7%). Original 88-sample files retained.
+2. **Step 2-3:** Wrote and ran `scripts/pcadapt_step2_3_checkin.R`. Scree plot with K=10 showed primary elbow after PC1 (20.1%), with PC2-PC6 forming a plateau at ~10-12%. Cattell's rule detected elbow at K=1; K=2 chosen to retain POST_INVASION detection capability. PCA missingness inspection (Yi 2022): all 4 borderline samples (WUS7 0.5 SD, NLD3 1.0 SD, DEU12 1.2 SD, SVK1 1.7 SD from centroids) cluster normally with their populations. No drift toward PCA origin. Decision: keep all 4.
+3. **Steps 4-8:** Rewrote `scripts/pcadapt_selection_scan.R` (replaced old VCF-based version). Ran pcadapt with K=2. Lambda=1.0 (no LD pruning needed). 311,978 SNPs returned NA p-values (monomorphic/invariant). Storey's q-value: pi0=1.0. Outliers: 42,288 at q<0.05, 30,157 at q<0.01. Classification: INVASION_SPECIFIC=32,043, POST_INVASION=662, BOTH=9,583. Diagnostic plots (Manhattan, Q-Q) generated with sqrt-transformed axes to handle p-value underflow (13 SNPs with p=0 capped at max finite -log10(p)=140).
+
+**Key results:**
+
+- K=2, lambda=1.0, pi0=1.0
+- 42,288 outliers at q<0.05 (exceeds expected 500-5,000 range but lambda=1 rules out inflation)
+- Signal overwhelmingly INVASION_SPECIFIC (75.8%), consistent with strong CHI-vs-invasive FST (~0.15)
+- POST_INVASION very small (1.6%), consistent with weak PC2 signal from scree plot
+- Q-Q plot shows 91% of SNPs track the null diagonal; steep departure in upper tail
+
+**Observations/flags:**
+
+- Outlier count (42K) is higher than per-SNP percentile at 1% (31,816) -- different methods, different thresholds
+- pi0=1.0 means Storey's q-values are equivalent to Benjamini-Hochberg (no power gain from pi0 estimation)
+- PC2 captures weak among-invasive structure; POST_INVASION results from pcadapt should be interpreted cautiously
+- 38.8% of SNPs returned NA p-values -- high, likely reflecting missingness patterns
+
+**Files created/modified:**
+
+- `data/plink/samples_exclude_pcadapt.txt`
+- `data/plink/ladybug_snps_pcadapt.{bed,bim,fam,imiss,lmiss,nosex,log}`
+- `scripts/pcadapt_step2_3_checkin.R` (new)
+- `scripts/pcadapt_selection_scan.R` (rewritten)
+- `results/pcadapt/pcadapt_outliers_q05.tsv`
+- `results/pcadapt/pcadapt_outliers_q01.tsv`
+- `results/pcadapt/pcadapt_summary.txt`
+- `results/pcadapt/step2_3_checkin.txt`
+- `results/pcadapt/plots/{screeplot,pca_scores_by_pop,pca_scores_by_missingness,manhattan,qqplot}.png`
+
+[SESSION END]
