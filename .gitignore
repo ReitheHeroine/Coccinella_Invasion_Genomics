@@ -13,3 +13,11 @@ data/
 # Temporary files
 *.log
 *.tmp
+
+# Claude Code local settings
+.claude/
+
+# Project documentation (kept private)
+project_notes/
+METHODS.md
+*.docx
