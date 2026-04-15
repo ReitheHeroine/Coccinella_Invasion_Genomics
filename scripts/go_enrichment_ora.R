@@ -9,9 +9,11 @@
 #   Runs clusterProfiler::enricher() on outlier genes vs the testable background
 #   (background genes with >=1 GO term). Tests INVASION_SPECIFIC, POST_INVASION,
 #   BOTH, and ALL foreground sets against each ontology (BP, MF, CC). Applies
-#   Benjamini-Hochberg FDR, reduces redundancy via ancestor pruning using GO.db,
-#   and emits publication-quality dotplots + a cross-pattern comparison figure.
-#   Implements Task 4.3 of the enrichment pipeline.
+#   Benjamini-Hochberg FDR, reduces redundancy via rrvgo (REVIGO-like local
+#   semantic similarity clustering, using org.Dm.eg.db as phylogenetic proxy
+#   for information content since no Coleoptera OrgDb is available), and emits
+#   publication-quality dotplots + rrvgo treemap/scatter + a cross-pattern
+#   comparison figure. Implements Task 4.3 of the enrichment pipeline.
 #
 # inputs:
 #   - results/enrichment/foreground_genes.tsv        (from Task 4.1)
@@ -21,12 +23,15 @@
 #
 # outputs (all in results/enrichment/):
 #   - enrichment_results_{pattern}_{ontology}.tsv
-#   - enrichment_results_simplified_{pattern}_{ontology}.tsv
+#   - enrichment_results_simplified_{pattern}_{ontology}.tsv   (rrvgo parent terms)
+#   - rrvgo_sim_matrix_{pattern}_{ontology}.rds                (cached sim matrix)
 #   - enrichment_summary.txt
 #   - enrichment_log.txt
 #   - plots/dotplot_{pattern}_{ontology}.png
 #   - plots/barplot_top_terms_{pattern}.png
 #   - plots/comparison_dotplot.png
+#   - plots/rrvgo_treemap_{pattern}_{ontology}.png
+#   - plots/rrvgo_scatter_{pattern}_{ontology}.png
 #
 # usage:
 #   Rscript scripts/go_enrichment_ora.R
@@ -41,7 +46,19 @@ suppressPackageStartupMessages({
   library(clusterProfiler)
   library(enrichplot)
   library(GO.db)
+  library(rrvgo)
+  library(org.Dm.eg.db)  # phylogenetic proxy for IC (no Coleoptera OrgDb available)
 })
+
+# --- rrvgo configuration ---
+# org.Dm.eg.db provides information-content weights for GO terms. D. melanogaster
+# is the closest well-annotated insect to C. septempunctata on Bioconductor; T.
+# castaneum has no OrgDb. IC values differ across species (D. melanogaster has
+# deeper functional annotation than a non-model beetle), which is a known
+# limitation and must be acknowledged in the manuscript.
+RRVGO_ORGDB    <- "org.Dm.eg.db"
+RRVGO_SIMCUT   <- 0.7   # "medium" in REVIGO terms: 0.4=tiny, 0.5=small, 0.7=medium, 0.9=large
+RRVGO_METHOD   <- "Rel" # Relevance: Schlicker et al. similarity; works well with D. melanogaster IC
 
 # --- CLI (simple key=value parser to avoid optparse dependency) ---
 
@@ -157,29 +174,107 @@ make_term_tables <- function(go_df, ont) {
   list(term2gene = as.data.frame(t2g), term2name = as.data.frame(t2n))
 }
 
-# --- Ancestor-based simplification (OrgDb-free) ---
+# --- rrvgo-based simplification ---
+#
+# rrvgo computes pairwise semantic similarity among significant GO terms via
+# GOSemSim (using org.Dm.eg.db IC), then clusters terms and selects a parent
+# term per cluster (highest-scoring member). Produces a reduced term table and
+# two visualizations: treemap (parent-child hierarchy with cluster sizes) and
+# MDS scatterplot (semantic space projection).
 
-ancestor_map <- list(
-  BP = as.list(GOBPANCESTOR),
-  MF = as.list(GOMFANCESTOR),
-  CC = as.list(GOCCANCESTOR)
-)
-
-simplify_by_ancestor <- function(enrich_df, ontology) {
-  # Keep the most specific significant term in each lineage: drop any term that is
-  # an ancestor of another significant term in the same result.
-  if (nrow(enrich_df) == 0) return(enrich_df)
-  amap <- ancestor_map[[ontology]]
-  sig_ids <- enrich_df$ID
-  drop <- rep(FALSE, length(sig_ids))
-  for (i in seq_along(sig_ids)) {
-    others <- setdiff(sig_ids, sig_ids[i])
-    for (o in others) {
-      anc <- amap[[o]]
-      if (!is.null(anc) && sig_ids[i] %in% anc) { drop[i] <- TRUE; break }
-    }
+simplify_by_rrvgo <- function(enrich_df, ontology, patt, plot_dir, out_dir) {
+  # Returns a list with: reduced (data.frame of parent terms), sim_matrix,
+  # reduced_terms (full rrvgo reduceSimMatrix output), or NULL if <2 terms.
+  if (nrow(enrich_df) < 2) {
+    log_msg("rrvgo: ", patt, " x ", ontology, " has <2 terms; skipping simplification")
+    return(list(reduced = enrich_df, sim_matrix = NULL, reduced_terms = NULL))
   }
-  enrich_df[!drop, , drop = FALSE]
+
+  id_col    <- if ("go_id" %in% names(enrich_df)) "go_id" else "ID"
+  score_col <- if ("q_value" %in% names(enrich_df)) "q_value" else "qvalue"
+  go_ids    <- enrich_df[[id_col]]
+  # rrvgo scores: higher = more important. Use -log10(q); clamp to avoid Inf.
+  scores    <- -log10(pmax(enrich_df[[score_col]], 1e-300))
+  names(scores) <- go_ids
+
+  sim_mat <- tryCatch(
+    rrvgo::calculateSimMatrix(
+      go_ids,
+      orgdb  = RRVGO_ORGDB,
+      ont    = ontology,
+      method = RRVGO_METHOD
+    ),
+    error = function(e) {
+      log_msg("rrvgo calculateSimMatrix error (", patt, " x ", ontology, "): ",
+              conditionMessage(e))
+      NULL
+    }
+  )
+  if (is.null(sim_mat) || any(dim(sim_mat) < 2)) {
+    log_msg("rrvgo: ", patt, " x ", ontology,
+            " produced a degenerate similarity matrix; skipping")
+    return(list(reduced = enrich_df, sim_matrix = sim_mat, reduced_terms = NULL))
+  }
+
+  saveRDS(sim_mat, file.path(out_dir,
+          sprintf("rrvgo_sim_matrix_%s_%s.rds", patt, ontology)))
+
+  reduced <- tryCatch(
+    rrvgo::reduceSimMatrix(
+      sim_mat,
+      scores    = scores[rownames(sim_mat)],
+      threshold = RRVGO_SIMCUT,
+      orgdb     = RRVGO_ORGDB
+    ),
+    error = function(e) {
+      log_msg("rrvgo reduceSimMatrix error (", patt, " x ", ontology, "): ",
+              conditionMessage(e)); NULL
+    }
+  )
+  if (is.null(reduced)) {
+    return(list(reduced = enrich_df, sim_matrix = sim_mat, reduced_terms = NULL))
+  }
+
+  # Parent-term table: one row per unique parent (cluster representative).
+  parent_df <- reduced %>%
+    dplyr::distinct(parent, parentTerm) %>%
+    dplyr::rename(parent_go_id = parent, parent_term = parentTerm) %>%
+    dplyr::left_join(
+      reduced %>%
+        dplyr::group_by(parent) %>%
+        dplyr::summarise(cluster_size = dplyr::n(),
+                         cluster_score = max(score, na.rm = TRUE),
+                         cluster_members = paste(unique(go), collapse = ";")),
+      by = c("parent_go_id" = "parent")
+    ) %>%
+    dplyr::arrange(dplyr::desc(cluster_score))
+
+  # Treemap
+  tm_path <- file.path(plot_dir, sprintf("rrvgo_treemap_%s_%s.png", patt, ontology))
+  tryCatch({
+    png(tm_path, width = 1600, height = 1000, res = 150)
+    rrvgo::treemapPlot(reduced,
+                       title = sprintf("rrvgo treemap: %s x %s", patt, ontology))
+    dev.off()
+  }, error = function(e) {
+    log_msg("rrvgo treemap failed (", patt, " x ", ontology, "): ", conditionMessage(e))
+    if (dev.cur() > 1) dev.off()
+  })
+
+  # MDS scatter (needs >=3 terms to be meaningful)
+  if (nrow(sim_mat) >= 3) {
+    sc_path <- file.path(plot_dir, sprintf("rrvgo_scatter_%s_%s.png", patt, ontology))
+    tryCatch({
+      p_sc <- rrvgo::scatterPlot(sim_mat, reduced, size = "score",
+                                 addLabel = TRUE, labelSize = 3)
+      ggsave(sc_path, p_sc, width = 9, height = 7, dpi = 300)
+    }, error = function(e) {
+      log_msg("rrvgo scatter failed (", patt, " x ", ontology, "): ",
+              conditionMessage(e))
+    })
+  }
+
+  list(reduced = parent_df, sim_matrix = sim_mat, reduced_terms = reduced)
 }
 
 # --- Foreground gene sets by pattern ---
@@ -241,12 +336,19 @@ for (patt in PATTERNS) {
       next
     }
 
-    res_df <- as.data.frame(er) %>%
-      rename(go_id = ID, go_term = Description,
-             gene_ratio = GeneRatio, bg_ratio = BgRatio,
-             p_value = pvalue, q_value = qvalue, p_adjust = p.adjust,
-             gene_list = geneID, count = Count) %>%
-      arrange(q_value)
+    res_df <- as.data.frame(er)
+    res_df <- dplyr::rename(res_df,
+      go_id      = "ID",
+      go_term    = "Description",
+      gene_ratio = "GeneRatio",
+      bg_ratio   = "BgRatio",
+      p_value    = "pvalue",
+      q_value    = "qvalue",
+      p_adjust   = "p.adjust",
+      gene_list  = "geneID",
+      count      = "Count"
+    )
+    res_df <- dplyr::arrange(res_df, q_value)
 
     out_path <- file.path(ENR_DIR, sprintf("enrichment_results_%s_%s.tsv", patt, ont))
     fwrite(res_df, out_path, sep = "\t")
@@ -268,9 +370,17 @@ for (patt in PATTERNS) {
       n_annotated_fg = n_ann_fg
     )
 
-    # Simplify via ancestor pruning on significant terms only (fall back to suggestive if none sig).
+    # Simplify via rrvgo on significant terms only (fall back to suggestive if none sig).
     base_for_simp <- if (nrow(sig) > 0) sig else sig_suggestive
-    simp_df <- if (nrow(base_for_simp) > 0) simplify_by_ancestor(base_for_simp, ont) else base_for_simp
+    if (nrow(base_for_simp) > 0) {
+      rr <- simplify_by_rrvgo(base_for_simp, ont, patt, PLOT_DIR, ENR_DIR)
+      simp_df <- rr$reduced
+      log_msg(sprintf("rrvgo %s x %s: %d input terms -> %d parent clusters",
+                      patt, ont, nrow(base_for_simp),
+                      if (is.data.frame(simp_df)) nrow(simp_df) else NA_integer_))
+    } else {
+      simp_df <- base_for_simp
+    }
     simp_path <- file.path(ENR_DIR, sprintf("enrichment_results_simplified_%s_%s.tsv", patt, ont))
     fwrite(simp_df, simp_path, sep = "\t")
     simp_results[[paste(patt, ont, sep = "_")]] <- simp_df

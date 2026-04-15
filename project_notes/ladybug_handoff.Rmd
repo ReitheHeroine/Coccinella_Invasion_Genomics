@@ -12,7 +12,7 @@ output:
 
 # Ladybug PopGen -- Handoff File
 
-**Last Updated:** 2026-04-14 (Task 4.1 complete; Task 4.3 script written and dry-run validated; Task 4.2 partially run but NOT finished -- Route A (direct gene2go) annotated 7,644/11,105 genes, Route B (BLAST orthology) failed at makeblastdb due to unquoted path containing spaces)
+**Last Updated:** 2026-04-14 (Tasks 4.1, 4.2, 4.3 all COMPLETE. Phase 4 GO enrichment pipeline finished end-to-end. Task 4.3 executed: 4 significant terms total across pattern x ontology at q<=0.05; results, simplified TSVs, and 17 plots written to results/enrichment/.)
 
 **Purpose:** Operational coordination across Claude sessions. Tracks current development state, active tasks, blockers, and data contracts. Updated every session.
 
@@ -196,7 +196,7 @@ Step [X] complete.
 - **Priority:** High
 - **Phase:** 4
 - **Component:** GO enrichment (ORA)
-- **Description:** Run over-representation analysis (ORA) using clusterProfiler's `enricher()` function with custom gene-to-GO annotation. Use the testable gene universe (background_genes with GO terms) as the background. Run enrichment separately for each pattern category (INVASION_SPECIFIC, POST_INVASION, BOTH) and for the combined foreground set. Apply Benjamini-Hochberg FDR correction. Collapse redundant GO terms using `simplify()` or REVIGO. Generate publication-quality plots.
+- **Description:** Run over-representation analysis (ORA) using clusterProfiler's `enricher()` function with custom gene-to-GO annotation. Use the testable gene universe (background_genes with GO terms) as the background. Run enrichment separately for each pattern category (INVASION_SPECIFIC, POST_INVASION, BOTH) and for the combined foreground set. Apply Benjamini-Hochberg FDR correction. Collapse redundant GO terms using `rrvgo` (REVIGO-like local R implementation; uses org.Dm.eg.db as phylogenetic proxy for information content since no OrgDb exists for C. septempunctata or T. castaneum on Bioconductor). Generate publication-quality plots including rrvgo's treemap and scatterplot for semantic visualization.
 - **Context/References:** ORA tests whether GO terms are overrepresented among outlier genes vs the testable background using Fisher's exact test (hypergeometric). This is the standard approach for selection scan studies (as opposed to GSEA, which requires a continuous ranking). Stratification by pattern category is the key analytical contribution: it asks whether different biological processes are associated with different phases of invasion (initial colonization vs post-invasion local adaptation). The BOTH category may be too small for meaningful enrichment depending on gene counts; report the null result if so. Each ontology (BP, MF, CC) should be tested separately. BP is the most biologically interpretable for invasion biology questions; MF and CC provide supporting evidence.
 - **Inputs:**
   - `results/enrichment/foreground_genes.tsv` (from Task 4.1; contains consensus_pattern column)
@@ -205,12 +205,15 @@ Step [X] complete.
   - `results/enrichment/background_genes.tsv` (from Task 4.1)
 - **Outputs:** All outputs in `results/enrichment/`
   - `enrichment_results_{pattern}_{ontology}.tsv` for each pattern (ALL, INVASION_SPECIFIC, POST_INVASION, BOTH) x ontology (BP, MF, CC): GO ID, GO term, gene ratio, bg ratio, p-value, q-value (BH-adjusted), gene list
-  - `enrichment_results_simplified_{pattern}_{ontology}.tsv`: after redundancy reduction via simplify()
+  - `enrichment_results_simplified_{pattern}_{ontology}.tsv`: after redundancy reduction via rrvgo (columns: parent_go_id, parent_term, cluster, score)
+  - `rrvgo_sim_matrix_{pattern}_{ontology}.rds`: cached semantic similarity matrix for reproducibility
   - `enrichment_summary.txt`: number of significant terms (q < 0.05) per pattern x ontology combination; number of foreground genes per pattern; annotation coverage per pattern
   - Plots in `results/enrichment/plots/`:
     - `dotplot_{pattern}_{ontology}.png`: top 15-20 enriched terms, dot size = gene ratio, color = q-value
     - `barplot_top_terms_{pattern}.png`: combined across ontologies, top 10 terms per pattern
     - `comparison_dotplot.png`: compareCluster-style plot showing enrichment across pattern categories side by side (BP only, for manuscript figure candidate)
+    - `rrvgo_treemap_{pattern}_{ontology}.png`: rrvgo treemap showing parent-term clustering (BP primarily)
+    - `rrvgo_scatter_{pattern}_{ontology}.png`: rrvgo MDS scatterplot of semantic space
   - `enrichment_log.txt`: full analysis log with parameters, warnings, and diagnostics
 - **Acceptance criteria:**
   - Report number of significant terms at q < 0.05 for each pattern x ontology combination
@@ -219,7 +222,7 @@ Step [X] complete.
   - If zero significant terms for a pattern at q < 0.05, report q < 0.10 as suggestive and note in summary
   - Check for suspiciously broad terms (e.g., "metabolic process," "binding") dominating the top results, which may indicate background bias; report if found
   - Generate comparison plot across patterns even if some patterns have no significant terms (shows the contrast)
-- **Dependencies:** Tasks 4.1 and 4.2 complete. R packages: clusterProfiler, enrichplot (for visualization). If not installed, install via BiocManager.
+- **Dependencies:** Tasks 4.1 and 4.2 complete. R packages: clusterProfiler, enrichplot, rrvgo, org.Dm.eg.db, GOSemSim. Install via BiocManager if missing. Note: rrvgo requires an OrgDb for information content calculation; using org.Dm.eg.db (D. melanogaster) as phylogenetic proxy since no Coleoptera OrgDb is available on Bioconductor. This proxy is a limitation to note in the manuscript.
 
 ### GEA Feasibility and Planning
 - **Assigned to:** User (Rei) / Claude.ai -- planning; Claude Code -- implementation
@@ -273,6 +276,8 @@ Step [X] complete.
 **Stratification rationale:** Running enrichment separately for INVASION_SPECIFIC, POST_INVASION, and BOTH patterns tests whether different biological processes associate with different phases of invasion. Combined (ALL) enrichment provides the overall picture. Pattern categories with < 20 annotated foreground genes are flagged as underpowered.
 
 **GO mapping approach:** Route A (NCBI gene2go direct) provides highest confidence but sparse coverage (~56%). Route B (orthology transfer via BLAST to T. castaneum) fills the gap via the existing two-step cascade. InterProScan and three-tier BLAST (adding D. melanogaster) are deferred as future improvements.
+
+**Redundancy reduction:** rrvgo (2026-04-14 revision). Initially spec'd clusterProfiler::simplify() but that requires an OrgDb for GOSemSim, which doesn't exist for C. septempunctata or T. castaneum on Bioconductor. rrvgo is a REVIGO-like Bioconductor package that performs scripted, reproducible GO term clustering locally. Uses org.Dm.eg.db (D. melanogaster) as phylogenetic proxy for information content calculation. Produces treemap and MDS scatterplot visualizations beyond what simplify() offers. Limitations: D. melanogaster IC values are an imperfect proxy for beetle-specific information content; acceptable compromise given the alternative (building a custom OrgDb via AnnotationForge is non-trivial).
 
 **Alternatives considered:**
   - Tier 1+2 as foreground (20,233 SNPs) instead of 2+ methods (3,205 SNPs): rejected because the tier system has no field precedent and Tier 2 includes single-method SNPs with "strong support," which is less defensible than requiring independent method confirmation
@@ -524,4 +529,204 @@ This section holds the in-progress session log entry. It is written during the s
 - `scripts/go_enrichment_ora.R`
 - (run-time outputs not yet produced; pending Task 4.2 completion)
 
+### Task 4.3 Executed (2026-04-14, after Task 4.2 completion)
+Task 4.2 `gene2go_foreground.tsv` (544 KB, 8,474 rows, 2,170 annotated fg genes) and `gene2go_background.tsv` (1.9 MB, 29,041 rows, 7,915 annotated bg genes) arrived from the anthill run. Schema matched the contract exactly.
+
+**Bug fix applied:** Initial run failed with `Error: object 'ID' not found`. Root cause: `clusterProfiler` masks `dplyr::rename()` with its own version that has different semantics. Fixed by switching to explicit `dplyr::rename()` with quoted column names. Script now runs clean in ~7 seconds.
+
+**Acceptance criteria check:**
+- Coverage: ALL 81.9%, INVASION_SPECIFIC 82.6%, POST_INVASION 80.9%, BOTH 88.1% (all above the 20-gene underpowered threshold; none flagged).
+- Background (testable, >=1 GO term): 7,915 of 11,105 (71.3%) -- used as ORA universe.
+- DISCORDANT (365 genes): excluded from stratified runs; retained in ALL.
+- No broad-term contamination in top 10 of any result.
+
+**Significant terms (q <= 0.05):**
+- ALL x BP: GO:0006633 fatty acid biosynthetic process (q=0.005, 9/1633); GO:0006468 protein phosphorylation (q=0.039, 63/1633)
+- ALL x MF: GO:0050839 cell adhesion molecule binding (q=0.012, 12/1828)
+- BOTH x CC: GO:0005912 adherens junction (q=0.026, 4/118)
+- INVASION_SPECIFIC: no terms sig at any ontology; none suggestive either.
+- POST_INVASION: no terms sig; 2 suggestive BP at q~=0.086 (GO:0030036 actin cytoskeleton organization, GO:0006468 protein phosphorylation).
+
+**Files produced (all in results/enrichment/):**
+- 12 x `enrichment_results_{pattern}_{ontology}.tsv`
+- 12 x `enrichment_results_simplified_{pattern}_{ontology}.tsv`
+- `enrichment_summary.txt`, `enrichment_log.txt`
+- Plots (17 total): per-pattern/ontology dotplots (12), per-pattern top-term barplots (4), `comparison_dotplot.png` (BP across patterns, 2 terms populated).
+
+**Interpretation notes (flag for Master Doc, not final):**
+- Signal in ALL is driven primarily by the larger POST_INVASION subset (1,410 of 2,648 fg genes), plus contributions from BOTH/INVASION_SPECIFIC. That the stratified POST_INVASION run itself is null-to-suggestive suggests the ALL signal depends on combined power rather than one pattern's coherent enrichment.
+- Adherens junction enrichment in BOTH (4/118 genes, q=0.026) is worth spot-checking -- small counts, but biologically interpretable given invasion/dispersal + cell adhesion literature.
+- No enrichment in INVASION_SPECIFIC despite 575 annotated genes suggests invasion-period selection is polygenic/diffuse at the GO level, not pathway-concentrated.
+
+### Files Created (this session, final)
+- `scripts/go_enrichment_ora.R` (committed 2026-04-14 as cfe4fc8; bug-fix rename change to be committed now)
+- `results/enrichment/enrichment_results_*.tsv` (24 files)
+- `results/enrichment/enrichment_summary.txt`, `enrichment_log.txt`
+- `results/enrichment/plots/*.png` (17 plots)
+
+### Task 4.3 Results -- Detailed Summary for Claude.ai Discussion (2026-04-14)
+
+This block is written self-contained so a fresh conversation (e.g. Claude.ai) can interpret the results without re-deriving project context. Use alongside Master Doc for methodology detail.
+
+#### Study context (one-paragraph recap)
+Population genomics of the invasive ladybird beetle *Coccinella septempunctata* (88 samples, 4 continent groups: CHI native, EEU/WEU/USA invasive). Phase 3 produced 54,965 cross-method outlier SNPs via FST + OutFLANK + pcadapt, of which 3,205 are high-confidence (n_methods >= 2). Those SNPs were labeled by which comparison flagged them (CHI-vs-invasive only -> INVASION_SPECIFIC; among-invasive only -> POST_INVASION; both -> BOTH; methods disagreed -> DISCORDANT). Phase 4 (Tasks 4.1-4.3) mapped SNPs to genes, annotated genes with GO terms, and ran ORA stratified by pattern. Task 4.3 is the ORA step.
+
+#### Method (Task 4.3)
+- **Tool:** clusterProfiler::enricher() with custom TERM2GENE / TERM2NAME per ontology.
+- **Foregrounds:** ALL (2,648 genes / 2,170 annotated), INVASION_SPECIFIC (696 / 575), POST_INVASION (1,410 / 1,141), BOTH (177 / 156). DISCORDANT (365 genes) retained in ALL only, excluded from stratified runs because the pattern itself reflects methodological disagreement rather than biology.
+- **Background / universe:** 7,915 autosomal genes with >=1 GO term (71.3% of 11,105 testable gene universe). Genes without any GO term are untestable by ORA and excluded from the universe.
+- **Ontologies:** BP, MF, CC tested separately (3 tests per foreground = 12 tests total).
+- **FDR:** Benjamini-Hochberg. Significance q <= 0.05; suggestive q <= 0.10 (per spec).
+- **Gene-set-size filter:** minGSSize=5, maxGSSize=500 (defaults).
+- **Simplification:** OrgDb-free ancestor-pruning via GO.db (keeps most specific term in each lineage). Note: user subsequently modified the script to add an rrvgo-based redundancy-reduction pathway using org.Dm.eg.db as a phylogenetic IC proxy (see script header); that variant has not been re-run yet.
+
+#### Results headline
+Four significant GO terms across 12 tests (q <= 0.05). All flagged terms are biologically specific (no "metabolic process" / "binding" broad-term contamination).
+
+| Pattern | Ontology | GO ID | Term | fg/bg ratio | q-value |
+|---|---|---|---|---|---|
+| ALL | BP | GO:0006633 | fatty acid biosynthetic process | 9/1633 vs 9/5715 | 0.005 |
+| ALL | BP | GO:0006468 | protein phosphorylation | 63/1633 vs 149/5715 | 0.039 |
+| ALL | MF | GO:0050839 | cell adhesion molecule binding | 12/1828 vs 15/6540 | 0.012 |
+| BOTH | CC | GO:0005912 | adherens junction | 4/118 vs 18/5633 | 0.026 |
+
+INVASION_SPECIFIC returned no terms significant or suggestive at any ontology. POST_INVASION returned no significant terms; 2 suggestive BP at q~=0.086 (GO:0030036 actin cytoskeleton organization; GO:0006468 protein phosphorylation). BOTH x BP, BOTH x MF both null. ALL x CC null.
+
+#### Suggestive clusters (q <= 0.10, used as supporting evidence)
+- **ALL x BP (2 sig + 12 suggestive total):** fatty acid biosynthesis (sig), protein phosphorylation (sig), cGMP biosynthesis, signal transduction, small GTPase signaling, actin cytoskeleton organization, innate immune response, fatty acid beta-oxidation, cell surface receptor signaling, GPCR/adenylate cyclase signaling, NHEJ double-strand break repair, N-glycan processing.
+- **ALL x MF (1 sig + 11 suggestive):** cell adhesion molecule binding (sig), guanyl-nucleotide exchange factor activity, guanylate cyclase activity, fatty acid synthase activity (5/5 genes, cross-confirms BP fatty-acid signal), 3-oxoacyl-ACP synthase activity, ATP-dependent chromatin remodeler activity, molecular adaptor activity, hexosyltransferase activity, G-protein beta/gamma-subunit complex binding, chitin binding, small GTPase binding.
+- **BOTH x CC (1 sig + 6 suggestive):** adherens junction (sig), plasma membrane, microvillus, filopodium, stress fiber, filamentous actin, Z disc. Coherent cell-junction/cytoskeleton theme.
+- **POST_INVASION x BP (0 sig + 2 suggestive):** actin cytoskeleton organization, protein phosphorylation.
+
+#### QC status
+- Annotation coverage per pattern 80.9-88.1% of fg genes (above the 20-gene underpowered threshold). BOTH (156 annotated) is smallest but still well over threshold.
+- Foreground annotation rate (81.9%) exceeds background rate (71.3%). This is the normal direction of bias (outlier genes tend to be conserved, which have better annotation) and reduces rather than inflates enrichment signal.
+- Broad-term flagger found zero hits in top 10 of any of the 12 tests. Top hits are specific biology, not housekeeping categories.
+- Foreground is a strict subset of background. Universe is the 7,915 testable background genes (not the full 11,105), per spec.
+- No enricher errors, no overflow, no ID-space mismatches. Pipeline produced all 24 results TSVs + 17 plots cleanly.
+
+#### Open interpretive questions for Claude.ai
+
+1. **Is 4 sig terms / 12 tests a red flag, or expected?** Heuristics on this vary. Relevant factors: (a) polygenic adaptation rarely concentrates in pathways; (b) pattern stratification divides power across 3 subsets; (c) ORA is conservative relative to GSEA; (d) non-model Coleoptera GO coverage is shallow and orthology-transferred terms skew conserved. But the sparseness could also reflect real architectural properties (polygenic local adaptation) or a methodological loss of signal. Opinion welcome on whether the current reporting frame ("weak but coherent signal") is honest or overconfident.
+
+2. **Why does ALL show signal but no pattern-stratified subset reproduces it?** Possible readings:
+   - Power: splitting 2,648 genes into 696 / 1,410 / 177 leaves each subset underpowered for small-effect terms; ALL's signal is the statistical pooling benefit, not a pattern-specific enrichment.
+   - Mixture: ALL is enriched because *different* small subsets contribute *different* terms whose signals compound; no single subset carries a term's full signal.
+   - Dilution: ALL contains DISCORDANT (365 genes) which pad foreground size and may dilute real pattern-level signal.
+   - Our current interpretation: mostly (a) with some (b). Would welcome alternate readings, especially on whether (c) is biasing anything.
+
+3. **Is the BOTH x CC adherens junction hit biologically meaningful at 4/118 foreground ratio?** Fold enrichment ~10x (4/118 vs 18/5633 -> 3.4% vs 0.32%) is strong; count is small. Adherens junction + the suggestive cytoskeletal cluster (filopodium, stress fiber, microvillus, filamentous actin) forms a coherent module. But with n=4 genes driving the sig result, spot-checking is warranted -- do those 4 genes also appear in other suggestive lists (plasma membrane, cytoskeleton)? Would benefit from Claude.ai perspective on whether cell-junction biology is a known/expected target in invasive-insect selection-scan literature (Harmonia axyridis, Drosophila suzukii, Ceratitis capitata, Aedes aegypti all have relevant comparisons).
+
+4. **INVASION_SPECIFIC null result -- biology or power?** 575 annotated genes with zero sig and zero suggestive terms across all ontologies. Competing readings:
+   - Biological: invasion-phase selection is highly polygenic; selection acted on many loci with small per-locus GO coherence (standing-variation sweeps).
+   - Methodological: CHI n=4 limits statistical power of the CHI-vs-invasive comparison itself, so INVASION_SPECIFIC SNP labels are noisy at the source; downstream enrichment therefore gets no signal because the SNP labels are partially noise.
+   - Annotation: GO annotations transferred via Harmonia-Tribolium orthology are conserved-biology-biased; invasion-specific adaptations may involve species-specific or rapidly-evolving genes that escape annotation.
+   - Need Claude.ai to weight these and suggest follow-up (e.g. inspect INVASION_SPECIFIC genes by manual annotation of top-FST outliers; check for Tol/Dmel-undetectable immune or chemosensory gene families).
+
+5. **POST_INVASION's 2 suggestive BP terms (actin cytoskeleton, protein phosphorylation) -- story or noise?** These echo the ALL-level signals exactly. Could reflect (a) real local-adaptation biology around cell motility / kinase-mediated signaling, or (b) genes that were already in the ALL top terms leaking into the POST_INVASION subset because POST_INVASION dominates ALL by raw count. How to disentangle?
+
+6. **Recommended sensitivity analyses before manuscript freeze?** Candidates:
+   - q <= 0.10 reporting (doubles the populated story without statistical dishonesty).
+   - Loosen minGSSize=3, maxGSSize=1000.
+   - Add GSEA-style complement on a per-gene selection score (e.g. max -log10 p across methods) using fgsea. Non-trivial to set up (need per-gene summary stat) but often surfaces polygenic signal ORA misses.
+   - GO slim reduction as a second-look at broad-category enrichment.
+   - Per-term per-gene detail reporting (manuscript table): the 9 fatty-acid genes, 12 cell-adhesion-binding genes, 4 adherens-junction genes. Feasible at these sizes.
+   - rrvgo-based parent-term reduction (script was updated to support this; not yet re-run). Would give a more REVIGO-like visual summary for the manuscript.
+
+7. **Manuscript framing.** Current proposed language: "ORA identified a small number of significantly enriched terms (n=4, q <= 0.05) concentrated in lipid metabolism, cell adhesion, and cytoskeletal/junction biology. A broader suggestive signature (q <= 0.10) reinforces these themes across ontologies. Pattern-stratified analyses reveal that cell-junction enrichment is specific to the BOTH subset (SNPs flagged in both CHI-vs-invasive and among-invasive comparisons), while the lipid-metabolism and adhesion signals are most visible in the pooled analysis." Want Claude.ai feedback on whether this is honest, whether it over- or under-claims, and whether the ordering/emphasis serves the invasion-biology story.
+
+#### Files Claude.ai should reference
+- Methods: `scripts/go_enrichment_ora.R` (header has full method description and updates)
+- Top-line results: `results/enrichment/enrichment_summary.txt`
+- Full results: `results/enrichment/enrichment_results_{pattern}_{ontology}.tsv` (12 files)
+- Simplified results (ancestor-pruned parents): `results/enrichment/enrichment_results_simplified_{pattern}_{ontology}.tsv`
+- Log with parameters/diagnostics: `results/enrichment/enrichment_log.txt`
+- Upstream inputs: `results/enrichment/gene2go_{foreground,background}.tsv`, `foreground_genes.tsv`, `background_genes.tsv`
+- Annotation coverage provenance: `results/enrichment/go_mapping_summary.txt`
+- Visuals: `results/enrichment/plots/` (dotplot_{pattern}_{ontology}.png, barplot_top_terms_{pattern}.png, comparison_dotplot.png)
+
 [SESSION END]
+
+### Task 4.2 Successful Anthill Run (2026-04-14, later same day)
+First successful end-to-end Task 4.2 run after the earlier makeblastdb-spaces failure. Work moved from local mesx/iCloud path to anthill cluster scratchF mount (no spaces in path), which resolved the BLAST DB build issue without any code change.
+
+**Cluster discovery:** Anthill runs Slurm (debug partition, node12, node14-17) and PBS/Torque (batch queue, node18+) side by side on the same `/usr/scratchF` mount. Slurm `debug` was heavily contended by another user (~14 running, 7 queued); PBS `batch` was uncontested. First submission via Slurm (jobs 68850, 68852) never dispatched; PBS submission dispatched instantly.
+
+**Submission:**
+- Script: `scripts/submit_task4_2.pbs` (paths fixed this session from stale `/sdd/home2/...` to `/usr/scratchF/rhastings/BIOL624_Project_Fall_2025`; `/home2/` conda path fixed to `${HOME}/miniconda3`)
+- Command: `qsub scripts/submit_task4_2.pbs`
+- Job ID: `7446.anthill`
+- Node: node20
+- Resources: ppn=16, mem=16gb, walltime=03:00:00 (actual wall 00:03:26; far faster than estimated)
+- Email policy: `#PBS -m abe` (abort/begin/end) + submit-time sendmail + 30-min in-job monitor to rhastings5624@sdsu.edu
+
+**Results (from `results/enrichment/go_mapping_summary.txt`):**
+- Foreground coverage: **81.9%** (2170/2648) -- exceeds 60% target and exceeds the 68% mesx Route-A-only baseline
+  - Route A only: 2,095; Route B only: 75; both: 0 (by construction, Route B only attempted on Route-A misses); neither: 478
+  - By ontology -- BP: 1,633; MF: 1,828; CC: 1,603
+- Background coverage: **71.3%** (7915/11105)
+  - Route A only: 7,644 (matches mesx Route A baseline of 68.8% exactly -- good reproducibility signal)
+  - Route B only: 271; both: 0; neither: 3,190
+- Unique GO terms: foreground union 2,340; background union 4,221
+- Cache: 0 hits (first anthill run), 7,915 misses written. `gene_go_cache.tsv` + `gene_go_cache_meta.txt` now present for future-run caching.
+
+**BLAST stage stats:**
+- Route B candidates: 3,461 genes; 2,499 with protein sequence, 962 without
+- Step 1 (Csep -> Harmonia axyridis @ 50% identity, evalue 1e-10): **1,658** hits in 69s
+- Step 2 (Harmonia -> Tribolium castaneum @ 30% identity, evalue 1e-10): **1,208** hits in 53s
+- Genes with GO inherited via two-step orthology: 271
+
+**Output files (`results/enrichment/`):**
+- `gene2go_foreground.tsv` -- 544,833 bytes, 8,475 lines
+- `gene2go_background.tsv` -- 1,874,716 bytes, 29,042 lines
+- `gene_go_cache.tsv` -- 2,331,117 bytes, 32,232 lines
+- `gene_go_cache_meta.txt` -- 487 bytes
+- `go_mapping_summary.txt` -- 1,162 bytes
+- `logs/task4_2.out` -- 3,117 bytes
+- `logs/task4_2.err` -- 72 bytes (single harmless esmtp config warning; no job failure)
+
+**Observations / caveats:**
+- "Both routes = 0" is structural (script only runs Route B on Route-A misses), not a data issue. [FOLLOW-UP NEEDED] if we want an independent full-set Route B run to validate agreement with Route A.
+- 478 foreground + 3,190 background genes remain unannotated. Candidates for a Route C (InterProScan domain-based) if downstream enrichment power is low.
+- BLAST was dramatically faster than my initial 60-120 min estimate because query sets are ~2.5k proteins and DBs are ~20k each -- small for modern blastp. Next time don't estimate without checking query/db sizes.
+- Task 4.3 (`scripts/go_enrichment_ora.R`) is now unblocked; all its required inputs exist.
+
+**Next steps:**
+- Review outputs before committing to git (user gated this explicitly).
+- rsync selected outputs to local for Task 4.3 development (see "Local development rsync list" below).
+- Run `Rscript scripts/go_enrichment_ora.R` once outputs are validated.
+
+### Local development rsync list (Task 4.2 -> Task 4.3 handoff)
+For continuing Task 4.3 development locally, pull the following from anthill. Everything lives under `/usr/scratchF/rhastings/BIOL624_Project_Fall_2025/`. Destination assumed to be the local project root.
+
+Required (Task 4.3 consumes these directly):
+- `results/enrichment/gene2go_foreground.tsv`
+- `results/enrichment/gene2go_background.tsv`
+- `results/enrichment/go_mapping_summary.txt`
+
+Strongly recommended (diagnostics + provenance):
+- `results/enrichment/logs/task4_2.out` (has the 7-stage log, BLAST counts, timestamps)
+- `results/enrichment/logs/task4_2.err` (1-line harmless warning; keep for audit trail)
+
+Optional (large; only pull if re-running locally or auditing cache logic):
+- `results/enrichment/gene_go_cache.tsv` (~2.3 MB)
+- `results/enrichment/gene_go_cache_meta.txt` (487 B; tiny, worth pulling if you pull the cache file)
+
+Do NOT rsync:
+- `data/go_annotations/gene2go` (9.96 GB NCBI file; only needed for re-running Route A)
+- `data/blast_db/` (rebuild from protein.faa if needed)
+- Existing local copies of `results/enrichment/{foreground,background}_genes.tsv` -- those are the Task 4.1 outputs and are already on local.
+
+One-liner (run from local project root, assumes `anthill:` ssh alias resolves to the right host):
+```
+rsync -avz --progress \
+    'anthill:/usr/scratchF/rhastings/BIOL624_Project_Fall_2025/results/enrichment/gene2go_foreground.tsv' \
+    'anthill:/usr/scratchF/rhastings/BIOL624_Project_Fall_2025/results/enrichment/gene2go_background.tsv' \
+    'anthill:/usr/scratchF/rhastings/BIOL624_Project_Fall_2025/results/enrichment/go_mapping_summary.txt' \
+    'anthill:/usr/scratchF/rhastings/BIOL624_Project_Fall_2025/results/enrichment/logs/task4_2.out' \
+    'anthill:/usr/scratchF/rhastings/BIOL624_Project_Fall_2025/results/enrichment/logs/task4_2.err' \
+    results/enrichment/
+```
+(Move `task4_2.*` into `results/enrichment/logs/` locally if the `logs/` subdir exists; the flat rsync above drops them into `results/enrichment/`.) [FOLLOW-UP NEEDED] confirm your ssh alias for anthill and adjust accordingly.
+
+[SESSION END 2026-04-14 PM]
