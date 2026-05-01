@@ -182,7 +182,7 @@ for (t_idx in seq_along(percentile_thresholds)) {
   threshold <- percentile_thresholds[t_idx]
   thresh_name <- threshold_names[t_idx]
 
-  cat('\n--- Threshold:', thresh_name, '(top', 100*(1-threshold), '%) ---\n\n')
+  cat('\n--- Threshold:', thresh_name, '(top', 100 * (1 - threshold), '%) ---\n\n')
 
   outliers_this_threshold <- list()
 
@@ -305,7 +305,7 @@ for (comp_name in outflank_comparisons) {
     matched_outflank <- 0
     both_methods_windows <- c()
 
-    for (i in 1:nrow(outflank_df)) {
+    for (i in seq_len(nrow(outflank_df))) {
       snp_chrom <- outflank_df$CHROM[i]
       snp_pos <- outflank_df$POS[i]
 
@@ -569,7 +569,7 @@ for (thresh_name in threshold_names) {
   cat('  Total outlier windows:', nrow(df), '\n')
   cat('  By comparison:\n')
   counts <- df %>% group_by(Comparison) %>% summarize(n = n(), .groups = 'drop')
-  for (i in 1:nrow(counts)) {
+  for (i in seq_len(nrow(counts))) {
     cat('    ', counts$Comparison[i], ':', counts$n[i], '\n')
   }
   cat('\n')
@@ -612,7 +612,7 @@ for (comp in unique(validation_summary$Comparison)) {
 cat('\n')
 
 cat('3. Pattern distribution reveals selection context:\n')
-for (i in 1:nrow(pattern_summary)) {
+for (i in seq_len(nrow(pattern_summary))) {
   cat('   - ', pattern_summary$Pattern[i], ': ',
       pattern_summary$N_Windows[i], ' windows\n', sep = '')
 }

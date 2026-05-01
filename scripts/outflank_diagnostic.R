@@ -121,8 +121,8 @@ read_population_file <- function(pop_name) {
 convert_to_biallelic <- function(gt_matrix) {
   geno_mat <- matrix(NA, nrow = nrow(gt_matrix), ncol = ncol(gt_matrix))
 
-  for (i in 1:nrow(gt_matrix)) {
-    for (j in 1:ncol(gt_matrix)) {
+  for (i in seq_len(nrow(gt_matrix))) {
+    for (j in seq_len(ncol(gt_matrix))) {
       g <- gt_matrix[i, j]
       if (is.na(g) || g == './.') {
         geno_mat[i, j] <- NA
@@ -572,7 +572,7 @@ for (vcf_file in vcf_files) {
   geno_mat <- geno_mat[keep, ]
 
   # Impute remaining missing
-  for (i in 1:nrow(geno_mat)) {
+  for (i in seq_len(nrow(geno_mat))) {
     if (any(is.na(geno_mat[i, ]))) {
       snp_mean <- mean(geno_mat[i, ], na.rm = TRUE)
       if (!is.na(snp_mean)) {

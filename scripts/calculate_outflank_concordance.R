@@ -341,7 +341,7 @@ if (length(all_concordance_results) > 0) {
       cat('OutFLANK outlier SNPs:', unique(comp_data$OutFLANK_SNPs), '\n')
       cat('OutFLANK outlier windows:', unique(comp_data$OutFLANK_Windows), '\n\n')
 
-      for (i in 1:nrow(comp_data)) {
+      for (i in seq_len(nrow(comp_data))) {
         cat('  ', comp_data$Threshold[i], ':\n')
         cat('    Percentile windows:', comp_data$Percentile_Windows[i], '\n')
         cat('    Both methods:', comp_data$Both_Methods[i], '\n')

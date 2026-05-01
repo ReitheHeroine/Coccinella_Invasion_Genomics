@@ -5,11 +5,11 @@ Extracts product names, gene types, and other info directly from GFF annotations
 """
 
 import argparse
-import re
 import os
 import sys
 from collections import defaultdict
 from urllib.parse import unquote
+
 
 def parse_gff_attributes(attr_string):
     """Parse GFF9 attribute string into dictionary."""
@@ -27,7 +27,7 @@ def load_gene_info_from_gff(gff_file):
     gene_info = {}
     gene_products = defaultdict(list)
 
-    with open(gff_file, 'r') as f:
+    with open(gff_file) as f:
         for line in f:
             if line.startswith('#'):
                 continue
@@ -43,11 +43,13 @@ def load_gene_info_from_gff(gff_file):
             if feature_type == 'gene':
                 gene_id = attrs.get('ID', '')
                 if gene_id:
+                    dbxref = attrs.get('Dbxref', '')
+                    ncbi_geneid = dbxref.replace('GeneID:', '') if 'GeneID:' in dbxref else ''
                     gene_info[gene_id] = {
                         'gene_id': gene_id,
                         'name': attrs.get('Name', gene_id.replace('gene-', '')),
                         'gene_biotype': attrs.get('gene_biotype', 'unknown'),
-                        'ncbi_geneid': attrs.get('Dbxref', '').replace('GeneID:', '') if 'GeneID:' in attrs.get('Dbxref', '') else '',
+                        'ncbi_geneid': ncbi_geneid,
                         'description': attrs.get('description', ''),
                         'products': []
                     }
@@ -78,7 +80,7 @@ def load_gene_info_from_gff(gff_file):
                 gene_info[gene_id]['description'] = products[0]
 
     # Also handle mRNA parents
-    with open(gff_file, 'r') as f:
+    with open(gff_file) as f:
         mrna_to_gene = {}
         for line in f:
             if line.startswith('#'):
@@ -107,7 +109,7 @@ def enrich_annotations(input_file, output_file, gene_info):
     print(f'\nEnriching annotations from {input_file}...')
 
     # Read input
-    with open(input_file, 'r') as f:
+    with open(input_file) as f:
         header = f.readline().strip().split('\t')
         rows = [line.strip().split('\t') for line in f if line.strip()]
 
@@ -146,7 +148,8 @@ def enrich_annotations(input_file, output_file, gene_info):
             stats['found'] += 1
         else:
             # Try without 'gene-' prefix
-            alt_id = f"gene-{gene_id}" if not gene_id.startswith('gene-') else gene_id.replace('gene-', '')
+            alt_id = (f"gene-{gene_id}" if not gene_id.startswith('gene-')
+                      else gene_id.replace('gene-', ''))
             if alt_id in gene_info:
                 info = gene_info[alt_id]
                 new_values = [
@@ -177,7 +180,7 @@ def enrich_annotations(input_file, output_file, gene_info):
             f.write('\t'.join(row) + '\n')
 
     print(f'  ✓ Wrote {len(enriched_rows)} enriched annotations')
-    print(f'\nSummary:')
+    print('\nSummary:')
     print(f'  Found in GFF: {stats["found"]} ({100*stats["found"]/len(rows):.1f}%)')
     print(f'  Not found: {stats["not_found"]} ({100*stats["not_found"]/len(rows):.1f}%)')
 

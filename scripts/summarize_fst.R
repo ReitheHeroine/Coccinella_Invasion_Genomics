@@ -176,7 +176,7 @@ cat(sprintf("%-15s  %10s  %10s  %10s  %8s  %8s  %10s\n",
             "Comparison", "Weighted", "Mean", "SD", "Min", "Max", "SNPs"))
 cat(paste(rep("-", 80), collapse = ""), "\n")
 
-for (i in 1:nrow(summary_df)) {
+for (i in seq_len(nrow(summary_df))) {
   row <- summary_df[i, ]
   cat(sprintf("%-15s  %10.4f  %10.4f  %10.4f  %8.4f  %8.4f  %10d\n",
               row$Comparison, row$Weighted_FST, row$Mean_FST, row$SD,
@@ -193,7 +193,7 @@ if ("N_Windows" %in% names(summary_df)) {
               "Comparison", "Median", "Q1", "Q3", "% Neg", "N_Windows"))
   cat(paste(rep("-", 70), collapse = ""), "\n")
 
-  for (i in 1:nrow(summary_df)) {
+  for (i in seq_len(nrow(summary_df))) {
     row <- summary_df[i, ]
     if (!is.na(row$N_Windows)) {
       cat(sprintf("%-15s  %10.4f  %10.4f  %10.4f  %7.1f%%  %10d\n",
