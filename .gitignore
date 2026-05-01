@@ -21,3 +21,59 @@ data/
 project_notes/
 METHODS.md
 *.docx
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# ===== R =====
+.Ruserdata
+Rplots.pdf
+*.Rcheck/
+
+# ===== Editor / IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ===== Cluster / PBS =====
+# Job output/error files - keep these out of the repo
+*.out
+*.err
+*.pbs.o*
+*.pbs.e*
+
+# ===== Scratch / temp =====
+scratch_*
+tmp_*
+
+# ===== Project-specific data that should never be committed =====
+# Add paths here if any data directories contain files that slip in
+# e.g., data/WG_VARIANTS/   (unfiltered whole-genome VCF - WARNING in master doc)
+
+# ===== QC tooling caches =====
+.claude/cache/
+
+# ===== QC tool configs (local-only, per project policy) =====
+/pyproject.toml
+/.lintr
+
+# ===== Generated artifacts (not source) =====
+# Rendered README (regenerable from README.md)
+/README.html
+# QC tooling report output (regenerable from QC tooling)
+/qc_smoke_report.txt
+# Diagnostic figures (regenerable from scripts/diagnostic_*.R)
+figures/
