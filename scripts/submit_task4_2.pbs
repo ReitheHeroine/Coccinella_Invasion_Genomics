@@ -1,0 +1,106 @@
+#!/bin/bash
+# ============================================================================
+# title:         submit_task4_2.pbs
+# project:       BIOL624 Population Genomics of Coccinella septempunctata
+# author:        Reina Hastings (reinahastings13@gmail.com)
+# date created:  2026-04-14
+# last modified: 2026-04-14 (fixed anthill paths: /usr/scratchF scratch, /home
+#                conda; added submit-time email, 30-min monitor interval)
+# purpose:       PBS submission script for Task 4.2 (gene-to-GO mapping) on
+#                anthill's PBS/Torque 'batch' queue (node18+). Runs
+#                scripts/gene_to_go_mapping.py under the ladybug conda env,
+#                streaming NCBI gene2go (Route A) and performing the two-step
+#                BLAST orthology transfer Csep -> Haxy -> Tcas (Route B).
+#                Launches a background monitor that emails a progress summary
+#                every 30 minutes. Also sends a submit-time confirmation email
+#                via sendmail (PBS has no SUBMIT mail-type).
+# inputs:        data/go_annotations/gene2go (9.9 GB, NCBI)
+#                data/go_annotations/tribolium_gene2go.tsv
+#                data/{csep,haxy,tcas}/.../protein.faa + genomic.gff
+#                results/enrichment/foreground_genes.tsv
+#                results/enrichment/background_genes.tsv
+# outputs:       results/enrichment/gene2go_foreground.tsv
+#                results/enrichment/gene2go_background.tsv
+#                results/enrichment/gene_go_cache.tsv (+ meta)
+#                results/enrichment/go_mapping_summary.txt
+# usage:         qsub scripts/submit_task4_2.pbs
+# cluster notes: anthill runs Slurm (debug) and PBS (batch) side by side on
+#                the same /usr/scratchF mount. PBS batch currently uncontested
+#                (unlike Slurm debug). conda lives at ~/miniconda3.
+# ============================================================================
+
+#PBS -N task4_2_gene2go
+#PBS -l nodes=1:ppn=16
+#PBS -l mem=16gb
+#PBS -l walltime=03:00:00
+#PBS -q batch
+#PBS -m abe
+#PBS -M rhastings5624@sdsu.edu
+#PBS -o /usr/scratchF/rhastings/BIOL624_Project_Fall_2025/results/enrichment/logs/task4_2.out
+#PBS -e /usr/scratchF/rhastings/BIOL624_Project_Fall_2025/results/enrichment/logs/task4_2.err
+
+# --- Environment Setup ---
+# Source bashrc/conda before strict mode; system bashrc uses unbound
+# PROMPT_COMMAND which trips set -u.
+source "${HOME}/.bashrc" 2>/dev/null || true
+source "${HOME}/miniconda3/etc/profile.d/conda.sh"
+conda activate ladybug
+
+set -uo pipefail
+
+# --- Locate Project Dir ---
+PROJECT_DIR='/usr/scratchF/rhastings/BIOL624_Project_Fall_2025'
+cd "${PROJECT_DIR}" || exit 1
+
+mkdir -p results/enrichment/logs
+
+# --- Submit-Time Confirmation Email ---
+# PBS '-m abe' covers abort/begin/end but has no SUBMIT mail-type; send an
+# explicit notice at the start of the job so the user gets a record that
+# submission succeeded. Begin still fires separately from PBS itself.
+JOBID="${PBS_JOBID:-local}"
+MAIL_TO="rhastings5624@sdsu.edu"
+{
+    printf 'To: %s\n' "${MAIL_TO}"
+    printf 'Subject: [Task 4.2] PBS job %s submitted\n' "${JOBID}"
+    printf 'Content-Type: text/plain; charset=UTF-8\n\n'
+    printf 'Task 4.2 PBS job %s has started allocation on %s.\n' "${JOBID}" "$(hostname)"
+    printf 'Submit time: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+    printf 'Queue:       %s\n' "${PBS_QUEUE:-batch}"
+    printf 'Progress emails every 30 min once running.\n'
+} | /usr/sbin/sendmail -t || true
+
+# --- Launch Background Monitor (30-min email updates) ---
+LOG_PATH="${PROJECT_DIR}/results/enrichment/logs/task4_2.out"
+
+bash scripts/monitor_task4_2.sh \
+    --log "${LOG_PATH}" \
+    --to "${MAIL_TO}" \
+    --jobid "${JOBID}" \
+    --interval 1800 &
+MONITOR_PID=$!
+
+# Ensure the monitor is killed no matter how the job exits (success,
+# error, or walltime kill). Torque's -m abe still delivers begin/end/abort.
+cleanup() {
+    if kill -0 "${MONITOR_PID}" 2>/dev/null; then
+        kill "${MONITOR_PID}" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+# --- Run Task 4.2 ---
+echo "=== Task 4.2 start: $(date '+%Y-%m-%d %H:%M:%S %Z') on $(hostname) ==="
+echo "Job ID:  ${JOBID}"
+echo "Threads: ${PBS_NP:-unset}"
+echo ''
+
+python scripts/gene_to_go_mapping.py \
+    --enrichment-dir results/enrichment \
+    --data-dir data \
+    --threads "${PBS_NP:-8}"
+
+RC=$?
+echo ''
+echo "=== Task 4.2 end: $(date '+%Y-%m-%d %H:%M:%S %Z') (rc=${RC}) ==="
+exit "${RC}"

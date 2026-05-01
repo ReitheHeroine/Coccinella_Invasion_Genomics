@@ -4,7 +4,9 @@
 # project: BIOL624 Final Project -- Population genomics of Coccinella septempunctata
 # author: Reina Hastings (reinahastings13@gmail.com)
 # date created: 2026-04-14
-# last modified: 2026-04-14
+# last modified: 2026-04-23 (ensure_blast_db: stage both -in and -out through
+#                            /tmp to work around makeblastdb's inability to
+#                            handle spaces in -out paths; handoff §4.1 fix.)
 #
 # purpose:
 #   Task 4.2: Map foreground and background C. septempunctata genes to GO terms
@@ -67,7 +69,6 @@
 
 import argparse
 import hashlib
-import os
 import re
 import shutil
 import subprocess
@@ -81,7 +82,6 @@ from urllib.parse import unquote
 
 try:
     from Bio import SeqIO
-    from Bio.Blast import NCBIXML
 except ImportError:
     sys.exit("ERROR: Biopython required. pip install biopython")
 
@@ -164,7 +164,7 @@ def load_gene2go_for_taxon(gene2go_path, taxid, target_genes):
     n_kept = 0
     with open(gene2go_path) as f:
         # Skip header
-        header = f.readline()
+        f.readline()
         # Header columns: #tax_id GeneID GO_ID Evidence Qualifier GO_term PubMed Category
         for line in f:
             n_lines += 1
@@ -219,16 +219,27 @@ def ensure_blast_db(faa_path, db_path, label):
         print(f"  BLAST DB already present: {label}", flush=True)
         return
     print(f"  Building BLAST DB for {label}...", flush=True)
-    # makeblastdb chokes on paths with spaces in some environments; stage to /tmp.
+    # makeblastdb fails on paths with spaces for both -in AND -out (see handoff
+    # Section 4.1 resolved question 2026-04-23). Stage BOTH through /tmp, then
+    # move the built DB sidecars (*.phr/.pin/.psq/.pdb/.pog/.pos/.pot/.ptf/.pto)
+    # back to the target directory.
     with tempfile.TemporaryDirectory() as td:
-        staged = Path(td) / Path(faa_path).name
-        shutil.copy(str(faa_path), str(staged))
-        cmd = ["makeblastdb", "-in", str(staged), "-dbtype", "prot",
-               "-out", str(db_path), "-title", label, "-parse_seqids"]
+        tdp = Path(td)
+        staged_in  = tdp / Path(faa_path).name
+        staged_out = tdp / db_path.name
+        shutil.copy(str(faa_path), str(staged_in))
+        cmd = ["makeblastdb", "-in", str(staged_in), "-dbtype", "prot",
+               "-out", str(staged_out), "-title", label, "-parse_seqids"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
             sys.exit(f"makeblastdb failed: {r.stderr}")
-    print(f"  Built: {db_path}", flush=True)
+        moved = 0
+        for produced in tdp.glob(db_path.name + ".*"):
+            shutil.move(str(produced), str(db_path.parent / produced.name))
+            moved += 1
+        if moved == 0:
+            sys.exit(f"makeblastdb produced no output sidecars for {label}")
+    print(f"  Built: {db_path} ({moved} sidecars)", flush=True)
 
 
 def batch_blastp_tabular(query_seqs, db_path, min_identity, threads, label):
@@ -261,7 +272,7 @@ def batch_blastp_tabular(query_seqs, db_path, min_identity, threads, label):
         hits = {}
         with open(ofile) as fh:
             for line in fh:
-                qid, sseqid, pident, length, evalue, bitscore = line.rstrip(
+                qid, sseqid, pident, _length, evalue, bitscore = line.rstrip(
                     "\n").split("\t")
                 pident_f = float(pident)
                 if pident_f < min_identity:
@@ -361,7 +372,7 @@ def read_cache(cache_path):
     """Returns {gene_id: list of cache rows (dicts)}.
     Includes rows with evidence_source == 'no_annotation' (sentinel).
     """
-    out = defaultdict(list)
+    out: defaultdict[str, list[dict[str, str]]] = defaultdict(list)
     if not cache_path.exists():
         return out
     with open(cache_path) as fh:
@@ -488,7 +499,7 @@ def assemble_rows(gene_ids, route_a, route_b, ortholog_meta):
     rows = []
     for g in gene_ids:
         seen_pairs_a = set()
-        for go_id, go_term, ont, evidence in route_a.get(g, []):
+        for go_id, go_term, ont, _evidence in route_a.get(g, []):
             key = (go_id, ont)
             if key in seen_pairs_a:
                 continue
@@ -500,7 +511,7 @@ def assemble_rows(gene_ids, route_a, route_b, ortholog_meta):
             })
         seen_pairs_b = set()
         meta = ortholog_meta.get(g, {})
-        for go_id, go_term, ont, evidence in route_b.get(g, []):
+        for go_id, go_term, ont, _evidence in route_b.get(g, []):
             key = (go_id, ont)
             if key in seen_pairs_b:
                 continue
@@ -520,7 +531,7 @@ def coverage_summary(label, gene_ids, route_a, route_b):
     """Returns dict with counts/percentages."""
     n = len(gene_ids)
     a_only = b_only = both = neither = 0
-    by_ont = {"BP": set(), "MF": set(), "CC": set()}
+    by_ont: dict[str, set[str]] = {"BP": set(), "MF": set(), "CC": set()}
     for g in gene_ids:
         in_a = g in route_a and len(route_a[g]) > 0
         in_b = g in route_b and len(route_b[g]) > 0
@@ -537,7 +548,8 @@ def coverage_summary(label, gene_ids, route_a, route_b):
                 if ont in by_ont:
                     by_ont[ont].add(g)
     annotated = a_only + b_only + both
-    pct = lambda x: f"{100.0*x/n:.1f}%" if n else "n/a"
+    def pct(x):
+        return f"{100.0*x/n:.1f}%" if n else "n/a"
     return {
         "label": label, "n_genes": n,
         "n_annotated": annotated, "pct_annotated": pct(annotated),
@@ -704,7 +716,7 @@ def main():
               "from scratch", flush=True)
         cache_rows = defaultdict(list)
 
-    cached_route_a, cached_route_b, cached_meta, cached_genes = (
+    _cached_route_a, _cached_route_b, _cached_meta, cached_genes = (
         split_cache_into_routes(cache_rows))
 
     # Genes still needing annotation = present in (foreground U background) but
@@ -902,7 +914,7 @@ def main():
     }
     write_summary(enr / "go_mapping_summary.txt",
                   fg_cov, bg_cov, n_unique, args, blast_stats)
-    print(f"  wrote go_mapping_summary.txt", flush=True)
+    print("  wrote go_mapping_summary.txt", flush=True)
 
     print("\nDone.", flush=True)
     print(f"Foreground coverage: {fg_cov['pct_annotated']} "
