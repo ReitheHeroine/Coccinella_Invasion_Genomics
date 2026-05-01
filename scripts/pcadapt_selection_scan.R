@@ -2,7 +2,16 @@
 # project: BIOL624 Final Project
 # author: Reina Hastings (reinahastings13@gmail.com)
 # date created: 2026-01-12
-# last modified: 2026-04-13
+# last modified: 2026-04-29 (K-sensitivity audit: K = 2 retained as the
+#                             canonical pcadapt run, but the rationale
+#                             section below now reflects a multi-criterion
+#                             diagnostic battery rather than a single auto-
+#                             detected scree value. Strict Cattell favors
+#                             K = 1; Kaiser and Horn favor K = 5; K = 2 is
+#                             an analyst-driven choice supported on
+#                             biological grounds. Outputs unchanged. See
+#                             results/pcadapt/diagnostics/diagnostic_report.md.)
+#                2026-04-13 (initial scan + scree-based K = 2 selection)
 #
 # purpose:
 #   Full pcadapt selection scan on C. septempunctata population genomic data.
@@ -66,7 +75,20 @@ OUTPUT_DIR   <- 'results/pcadapt'
 PLOT_DIR     <- 'results/pcadapt/plots'
 
 # Analysis parameters
-K <- 2                     # Selected from scree plot (Cattell's rule)
+# K: analyst-driven choice supported by the 2026-04-29 K-sensitivity audit
+# (results/pcadapt/diagnostics/diagnostic_report.md). The strict Cattell
+# scree test favors K = 1; Kaiser-Guttman and Horn's parallel analysis
+# favor K = 5. K = 2 is justified for this dataset because (a) PC2
+# separates WEU from USA on the score plot (mean PC2 = +0.091 in WEU vs
+# -0.063 in USA, with EEU intermediate), (b) |PC2 loading| correlates
+# with per-SNP among-invasive max FST (Spearman rho = 0.22, top decile
+# 3.4x the bottom-decile mean FST), and (c) the K=2-only outliers
+# (relative to K=1) are enriched for high among-invasive FST (52% above
+# the 0.190 panel-specific top-1% threshold vs 38% for K=1-only outliers),
+# so K=2 contributes signal rather than noise to the cross-method
+# concordance call. K=3 was rejected because PC3 shows no population
+# separation on the score plot.
+K <- 2                     # See K rationale block above and diagnostic_report.md
 Q_THRESHOLD_PRIMARY <- 0.05  # Storey's q-value, primary
 Q_THRESHOLD_STRINGENT <- 0.01  # Storey's q-value, stringent
 Z_THRESHOLD <- 2           # Component-wise significance for PC loading
@@ -207,7 +229,7 @@ cat('\n--- Step 6: PC Loading Classification ---\n\n')
 
 # Build results data frame
 results <- data.frame(
-  snp_index = 1:nrow(bim),
+  snp_index = seq_len(nrow(bim)),
   chrom     = bim$chrom,
   pos       = bim$pos,
   snp_id    = paste0(bim$chrom, ':', bim$pos),
@@ -341,7 +363,7 @@ p_manhattan <- ggplot(plot_data, aes(x = bp_cumul, y = sqrt_neg_log10_p)) +
     name = 'Category'
   ) +
   scale_x_continuous(breaks = chrom_labels$center,
-                     labels = paste0('Chr', 1:nrow(chrom_labels))) +
+                     labels = paste0('Chr', seq_len(nrow(chrom_labels)))) +
   labs(
     title = 'pcadapt Manhattan Plot',
     subtitle = paste0(n_outliers_q05, ' outliers at q < 0.05 | K = ', K,
@@ -436,7 +458,7 @@ tryCatch({
                  color = 'red', size = 1, alpha = 0.7) +
       scale_color_manual(values = c('0' = 'grey60', '1' = 'grey80'), guide = 'none') +
       scale_x_continuous(breaks = chrom_labels$center,
-                         labels = paste0('Chr', 1:nrow(chrom_labels))) +
+                         labels = paste0('Chr', seq_len(nrow(chrom_labels)))) +
       labs(
         title = 'pcadapt Manhattan Plot',
         subtitle = paste0(n_outliers_q05, ' outliers at q < 0.05 (red) | K = ', K,
@@ -512,11 +534,22 @@ cat('Mean per-sample missingness:', round(mean(miss_rate) * 100, 2), '%\n\n')
 
 cat('PCADAPT PARAMETERS\n')
 cat('------------------\n')
-cat('K:', K, '(selected by Cattell rule from scree plot)\n')
-cat('K rationale: PC1 separates CHI from invasive; PC2 captures among-invasive\n')
-cat('  variation. Scree plot shows primary elbow after PC1; PC2-PC6 form plateau\n')
-cat('  at ~10-12%. K=2 retained to enable POST_INVASION detection, but PC2\n')
-cat('  results should be interpreted cautiously.\n')
+cat('K:', K, '(analyst-driven choice; not auto-selected from scree plot)\n')
+cat('K rationale (post 2026-04-29 K-sensitivity audit):\n')
+cat('  Three independent K criteria computed in pcadapt_step2_3_checkin.R:\n')
+cat('    Cattell strict (no min-floor): K = 1\n')
+cat('    Kaiser-Guttman (var > 1/N):    K = 5\n')
+cat('    Horn parallel analysis (95%):  K = 5\n')
+cat('  K=2 is an analytical choice on top of these diagnostics, supported by:\n')
+cat('  - PC1 cleanly separates CHI from invasives; PC2 separates WEU (+0.09)\n')
+cat('    from USA (-0.06) on the score plot.\n')
+cat('  - |PC2 loading| correlates with per-SNP among-invasive max FST\n')
+cat('    (Spearman rho = 0.22; top decile 3.4x bottom-decile mean FST).\n')
+cat('  - K=2-only outliers (vs K=1) are enriched for high among-invasive FST\n')
+cat('    (52% above the panel top-1%% threshold, vs 38%% for K=1-only).\n')
+cat('  - PC3 shows no population separation on the score plot, so K=3 is\n')
+cat('    over-fit (would absorb signal as structure).\n')
+cat('  See results/pcadapt/diagnostics/diagnostic_report.md for the full audit.\n')
 cat('Method: Mahalanobis distance (default)\n')
 cat('LD pruning: None (unpruned)\n')
 cat('FDR method: Storey q-value\n')
@@ -586,7 +619,7 @@ chrom_dist <- outliers_q05 %>%
   group_by(chrom) %>%
   summarize(n = n(), .groups = 'drop') %>%
   arrange(match(chrom, CHROM_ORDER))
-for (i in 1:nrow(chrom_dist)) {
+for (i in seq_len(nrow(chrom_dist))) {
   cat(sprintf('  Chr%d (%s): %d outliers\n', i, chrom_dist$chrom[i], chrom_dist$n[i]))
 }
 cat('\n')
