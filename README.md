@@ -48,16 +48,14 @@ A population genomics pipeline that detects signatures of selection in the seven
               candidate SNPs ◄───────────────────┘
                      │
                      ▼
-    [ snp_to_gene_mapping.R / annotate_outliers_local.py ]
-        nearest gene from GFF (genic vs intergenic + distance)
-                     │
-                     ▼
-        [ BLAST ortholog chain: Csep → Harmonia → Tribolium ]
+    [ snp_to_gene_mapping.R ]
+        nearest gene from GFF (genic / flanking / intergenic, 5 kb window)
                      │
                      ▼
        [ gene_to_go_mapping.py ]
          Route A: NCBI gene2go (taxid 41139, streamed)
-         Route B: ortholog transfer via Tribolium gene2go
+         Route B: ortholog chain Csep → Harmonia → Tribolium
+                  (persistent MD5-indexed cache)
                      │
                      ▼
           [ go_enrichment_ora.R ]
@@ -139,7 +137,6 @@ Rscript scripts/cross_method_concordance.R
 
 # 5. SNP-to-gene mapping and functional annotation
 Rscript scripts/snp_to_gene_mapping.R
-python scripts/annotate_outliers_local.py
 python scripts/gene_to_go_mapping.py
 
 # 6. GO overrepresentation analysis
@@ -161,6 +158,7 @@ Rscript scripts/Future_Climate_Projection
 │   ├── pop_{Asia,CHI,EEU,WEU,Europe,USA,North_America}.txt
 │   └── C7_samples_locations*.xlsx       # source metadata (collection sites)
 ├── scripts/
+│   ├── _archive/                         # superseded Dec-2025 scripts (kept out of linting)
 │   ├── chr_filter.sh                    # vcftools: per-chr SNP/site/genotype filtering
 │   ├── diversity.sh                     # vcftools: Tajima's D, windowed and site pi
 │   ├── fst.sh                           # vcftools: Weir-Cockerham FST, 5 kb windows
@@ -173,10 +171,7 @@ Rscript scripts/Future_Climate_Projection
 │   ├── cross_method_concordance.R       # pcadapt vs FST outlier agreement
 │   ├── merge_selection_metrics.R        # join per-SNP stats across methods
 │   ├── snp_to_gene_mapping.R            # nearest-gene assignment from GFF
-│   ├── annotate_outliers_local.py       # local BLAST ortholog chain + GO transfer
-│   ├── annotate_outliers_with_go.py     # Tribolium-based GO transfer for outliers
 │   ├── enrich_from_gff.py               # offline: pull product/biotype from GFF
-│   ├── enrich_gene_annotations_local.py # NCBI Gene lookup with BLAST fallback
 │   ├── gene_to_go_mapping.py            # two-route GO mapping with persistent cache
 │   ├── go_enrichment_ora.R              # clusterProfiler ORA, custom background
 │   ├── go_enrichment_analysis.R         # alternative enrichment formulation
@@ -210,4 +205,4 @@ vcftools (Tajima's D, windowed/site pi, Weir-Cockerham FST), PLINK 1.9 (LD pruni
 
 ## Author
 
-Reina Hastings. GitHub: [@reinahastings](https://github.com/reinahastings). This is a personal portfolio project; no lab affiliation.
+Reina Hastings. GitHub: [@reinahastings](https://github.com/reinahastings). This project was conducted in the [Sethuraman Lab](https://www.sethuramanlab.com/) (population genomics, evolution, bioinformatics) led by Dr. Arun Sethuraman.
