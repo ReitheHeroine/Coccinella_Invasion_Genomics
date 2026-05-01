@@ -37,7 +37,9 @@ MASTER_TSV <- file.path(BASE_DIR, "results/cross_method_concordance/master_candi
 BIM_PATH   <- file.path(BASE_DIR, "data/plink/ladybug_snps.bim")
 OUT_DIR    <- file.path(BASE_DIR, "results/enrichment")
 
-SEX_CHROM       <- "NC_058189.1"
+# NC_058198.1 is chromosome 10 (sex); the other 9 are autosomes.
+# NOTE (2026-04-23): previously set to NC_058189.1 (a typo). Corrected as part of Task 4.7.
+SEX_CHROM       <- "NC_058198.1"
 UPSTREAM_FLANK  <- 5000   # 5 kb upstream
 DOWNSTREAM_FLANK <- 2000  # 2 kb downstream
 MIN_METHODS     <- 2      # foreground threshold

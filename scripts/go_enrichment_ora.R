@@ -2,36 +2,46 @@
 # project: BIOL624 Final Project
 # author: Reina Hastings (reinahastings13@gmail.com)
 # date created: 2026-04-14
-# last modified: 2026-04-14
+# last modified: 2026-04-24 (Task 4.7 follow-up: stratification migrated from
+#                            per-SNP consensus_pattern to gene-level
+#                            selection_block; DISCORDANT exclusion logic
+#                            dropped because selection_block has no analog;
+#                            run order is now Task 4.4 -> Task 4.3 since 4.3
+#                            now consumes selection_block from Task 4.4's
+#                            candidate_gene_fst_by_axis.tsv output.)
 #
 # purpose:
-#   GO over-representation analysis (ORA) stratified by consensus_pattern.
+#   GO over-representation analysis (ORA) stratified by selection_block.
 #   Runs clusterProfiler::enricher() on outlier genes vs the testable background
-#   (background genes with >=1 GO term). Tests INVASION_SPECIFIC, POST_INVASION,
-#   BOTH, and ALL foreground sets against each ontology (BP, MF, CC). Applies
-#   Benjamini-Hochberg FDR, reduces redundancy via rrvgo (REVIGO-like local
-#   semantic similarity clustering, using org.Dm.eg.db as phylogenetic proxy
-#   for information content since no Coleoptera OrgDb is available), and emits
-#   publication-quality dotplots + rrvgo treemap/scatter + a cross-pattern
-#   comparison figure. Implements Task 4.3 of the enrichment pipeline.
+#   (background genes with >=1 GO term). Tests AMONG_INVASIVE, NATIVE_VS_INVASIVE,
+#   LAYERED_SELECTION, POPULATION_SPECIFIC, and ALL foreground sets against each
+#   ontology (BP, MF, CC). Applies Benjamini-Hochberg FDR, reduces redundancy
+#   via rrvgo (REVIGO-like local semantic similarity clustering, using
+#   org.Dm.eg.db as phylogenetic proxy for information content since no
+#   Coleoptera OrgDb is available), and emits publication-quality dotplots +
+#   rrvgo treemap/scatter + a cross-block comparison figure. Implements
+#   Task 4.3 of the enrichment pipeline.
 #
 # inputs:
 #   - results/enrichment/foreground_genes.tsv        (from Task 4.1)
 #   - results/enrichment/background_genes.tsv        (from Task 4.1)
 #   - results/enrichment/gene2go_foreground.tsv      (from Task 4.2)
 #   - results/enrichment/gene2go_background.tsv      (from Task 4.2)
+#   - results/enrichment/candidate_gene_fst_by_axis.tsv  (from Task 4.4 / Step 7e;
+#       supplies the per-gene selection_block column. NOTE: requires Task 4.4
+#       to have run before Task 4.3.)
 #
 # outputs (all in results/enrichment/):
-#   - enrichment_results_{pattern}_{ontology}.tsv
-#   - enrichment_results_simplified_{pattern}_{ontology}.tsv   (rrvgo parent terms)
-#   - rrvgo_sim_matrix_{pattern}_{ontology}.rds                (cached sim matrix)
+#   - enrichment_results_{block}_{ontology}.tsv
+#   - enrichment_results_simplified_{block}_{ontology}.tsv   (rrvgo parent terms)
+#   - rrvgo_sim_matrix_{block}_{ontology}.rds                (cached sim matrix)
 #   - enrichment_summary.txt
 #   - enrichment_log.txt
-#   - plots/dotplot_{pattern}_{ontology}.png
-#   - plots/barplot_top_terms_{pattern}.png
-#   - plots/comparison_dotplot.png
-#   - plots/rrvgo_treemap_{pattern}_{ontology}.png
-#   - plots/rrvgo_scatter_{pattern}_{ontology}.png
+#   - plots/dotplot_{block}_{ontology}.{png,pdf}
+#   - plots/barplot_top_terms_{block}.{png,pdf}
+#   - plots/comparison_dotplot.{png,pdf}
+#   - plots/rrvgo_treemap_{block}_{ontology}.{png,pdf}
+#   - plots/rrvgo_scatter_{block}_{ontology}.{png,pdf}
 #
 # usage:
 #   Rscript scripts/go_enrichment_ora.R
@@ -101,8 +111,13 @@ BG_GENES_PATH <- file.path(ENR_DIR, "background_genes.tsv")
 FG_GO_PATH    <- file.path(ENR_DIR, "gene2go_foreground.tsv")
 BG_GO_PATH    <- file.path(ENR_DIR, "gene2go_background.tsv")
 
-PATTERNS   <- c("ALL", "INVASION_SPECIFIC", "POST_INVASION", "BOTH")
+# Selection blocks (Task 4.7 axis-based scheme; see handoff §3.1 Step 7f).
+# Order: ALL first, then the 4 axis blocks. Variable name PATTERNS retained
+# from the pre-Task-4.7 version to minimize diff churn but now stores blocks.
+PATTERNS   <- c("ALL", "AMONG_INVASIVE", "NATIVE_VS_INVASIVE",
+                "LAYERED_SELECTION", "POPULATION_SPECIFIC")
 ONTOLOGIES <- c("BP", "MF", "CC")
+FST_BY_AXIS_PATH <- file.path(ENR_DIR, "candidate_gene_fst_by_axis.tsv")
 
 # Broad GO terms to flag if they dominate top results (potential background bias).
 BROAD_TERMS <- c("metabolic process", "binding", "cellular process",
@@ -128,12 +143,13 @@ log_msg("qcut=", opt$qcut, " top=", opt$top, " min_genes=", opt$min_genes,
 
 # --- Input validation ---
 
-required_inputs <- c(FG_GENES_PATH, BG_GENES_PATH, FG_GO_PATH, BG_GO_PATH)
+required_inputs <- c(FG_GENES_PATH, BG_GENES_PATH, FG_GO_PATH, BG_GO_PATH,
+                     FST_BY_AXIS_PATH)
 missing_inputs  <- required_inputs[!file.exists(required_inputs)]
 if (length(missing_inputs) > 0) {
   log_msg("BLOCKER: missing required inputs:")
   for (f in missing_inputs) log_msg("  - ", f)
-  stop("Task 4.2 outputs not found. Cannot run Task 4.3 until gene-to-GO mapping is complete.")
+  stop("Required inputs not found. Cannot run Task 4.3 until Tasks 4.1, 4.2, 4.4 are complete.")
 }
 
 # --- Load data ---
@@ -142,20 +158,20 @@ fg_genes <- fread(FG_GENES_PATH)
 bg_genes <- fread(BG_GENES_PATH)
 fg_go    <- fread(FG_GO_PATH)
 bg_go    <- fread(BG_GO_PATH)
+axis_df  <- fread(FST_BY_AXIS_PATH, select = c("gene_id", "selection_block",
+                                               "gene_state"))
+
+# Join selection_block onto foreground (selection_block from Task 4.4 output)
+fg_genes <- merge(fg_genes, axis_df, by = "gene_id", all.x = TRUE, sort = FALSE)
 
 log_msg("Loaded foreground genes: ",    nrow(fg_genes))
 log_msg("Loaded background genes: ",    nrow(bg_genes))
 log_msg("Loaded foreground gene-GO: ",  nrow(fg_go),  " rows, ", length(unique(fg_go$gene_id)), " genes")
 log_msg("Loaded background gene-GO: ",  nrow(bg_go),  " rows, ", length(unique(bg_go$gene_id)), " genes")
-
-# --- DISCORDANT decision ---
-
-# DISCORDANT signals methodological disagreement across detection methods. Exclude
-# from pattern-stratified runs (the pattern has no coherent biological meaning),
-# but retain in ALL since ALL is the entire high-confidence foreground.
-n_discordant <- sum(fg_genes$consensus_pattern == "DISCORDANT")
-log_msg("DISCORDANT genes in foreground: ", n_discordant,
-        " (retained in ALL; excluded from pattern-stratified runs)")
+log_msg("Joined selection_block from Task 4.4 output: ",
+        sum(!is.na(fg_genes$selection_block)), "/",  nrow(fg_genes),
+        " foreground genes have a selection_block (the rest are non-genic ",
+        "and excluded from block-stratified enrichment).")
 
 # --- TERM2GENE / TERM2NAME per ontology ---
 
@@ -228,7 +244,8 @@ simplify_by_rrvgo <- function(enrich_df, ontology, patt, plot_dir, out_dir) {
     ),
     error = function(e) {
       log_msg("rrvgo reduceSimMatrix error (", patt, " x ", ontology, "): ",
-              conditionMessage(e)); NULL
+              conditionMessage(e))
+      NULL
     }
   )
   if (is.null(reduced)) {
@@ -249,12 +266,16 @@ simplify_by_rrvgo <- function(enrich_df, ontology, patt, plot_dir, out_dir) {
     ) %>%
     dplyr::arrange(dplyr::desc(cluster_score))
 
-  # Treemap
-  tm_path <- file.path(plot_dir, sprintf("rrvgo_treemap_%s_%s.png", patt, ontology))
+  # Treemap (uses base graphics device; emit both PNG and PDF)
+  tm_png <- file.path(plot_dir, sprintf("rrvgo_treemap_%s_%s.png", patt, ontology))
+  tm_pdf <- file.path(plot_dir, sprintf("rrvgo_treemap_%s_%s.pdf", patt, ontology))
+  tm_title <- sprintf("rrvgo treemap: %s x %s", patt, ontology)
   tryCatch({
-    png(tm_path, width = 1600, height = 1000, res = 150)
-    rrvgo::treemapPlot(reduced,
-                       title = sprintf("rrvgo treemap: %s x %s", patt, ontology))
+    png(tm_png, width = 1600, height = 1000, res = 150)
+    rrvgo::treemapPlot(reduced, title = tm_title)
+    dev.off()
+    pdf(tm_pdf, width = 11, height = 7)  # 1600/150 = 10.7" x 1000/150 = 6.7"
+    rrvgo::treemapPlot(reduced, title = tm_title)
     dev.off()
   }, error = function(e) {
     log_msg("rrvgo treemap failed (", patt, " x ", ontology, "): ", conditionMessage(e))
@@ -263,11 +284,13 @@ simplify_by_rrvgo <- function(enrich_df, ontology, patt, plot_dir, out_dir) {
 
   # MDS scatter (needs >=3 terms to be meaningful)
   if (nrow(sim_mat) >= 3) {
-    sc_path <- file.path(plot_dir, sprintf("rrvgo_scatter_%s_%s.png", patt, ontology))
+    sc_png <- file.path(plot_dir, sprintf("rrvgo_scatter_%s_%s.png", patt, ontology))
+    sc_pdf <- file.path(plot_dir, sprintf("rrvgo_scatter_%s_%s.pdf", patt, ontology))
     tryCatch({
       p_sc <- rrvgo::scatterPlot(sim_mat, reduced, size = "score",
                                  addLabel = TRUE, labelSize = 3)
-      ggsave(sc_path, p_sc, width = 9, height = 7, dpi = 300)
+      ggsave(sc_png, p_sc, width = 9, height = 7, dpi = 300)
+      ggsave(sc_pdf, p_sc, width = 9, height = 7)
     }, error = function(e) {
       log_msg("rrvgo scatter failed (", patt, " x ", ontology, "): ",
               conditionMessage(e))
@@ -277,23 +300,31 @@ simplify_by_rrvgo <- function(enrich_df, ontology, patt, plot_dir, out_dir) {
   list(reduced = parent_df, sim_matrix = sim_mat, reduced_terms = reduced)
 }
 
-# --- Foreground gene sets by pattern ---
+# --- Foreground gene sets by selection_block ---
 
+# ALL = entire foreground (genic + non-genic, every consensus_pattern). The
+# 4 axis-based blocks subset by selection_block and are necessarily genic
+# (selection_block is NA for non-genic genes per Task 4.4 derivation).
 foreground_sets <- list(
-  ALL               = fg_genes$gene_id,
-  INVASION_SPECIFIC = fg_genes$gene_id[fg_genes$consensus_pattern == "INVASION_SPECIFIC"],
-  POST_INVASION     = fg_genes$gene_id[fg_genes$consensus_pattern == "POST_INVASION"],
-  BOTH              = fg_genes$gene_id[fg_genes$consensus_pattern == "BOTH"]
+  ALL                 = fg_genes$gene_id,
+  AMONG_INVASIVE      = fg_genes$gene_id[!is.na(fg_genes$selection_block) &
+                                         fg_genes$selection_block == "AMONG_INVASIVE"],
+  NATIVE_VS_INVASIVE  = fg_genes$gene_id[!is.na(fg_genes$selection_block) &
+                                         fg_genes$selection_block == "NATIVE_VS_INVASIVE"],
+  LAYERED_SELECTION   = fg_genes$gene_id[!is.na(fg_genes$selection_block) &
+                                         fg_genes$selection_block == "LAYERED_SELECTION"],
+  POPULATION_SPECIFIC = fg_genes$gene_id[!is.na(fg_genes$selection_block) &
+                                         fg_genes$selection_block == "POPULATION_SPECIFIC"]
 )
 
-# Annotation coverage per pattern
+# Annotation coverage per block
 ann_coverage <- sapply(foreground_sets, function(g) {
   n_total <- length(g)
   n_ann   <- sum(g %in% unique(fg_go$gene_id))
   c(n_total = n_total, n_annotated = n_ann,
     pct_annotated = if (n_total == 0) NA else 100 * n_ann / n_total)
 })
-log_msg("Foreground pattern sizes and annotation coverage:")
+log_msg("Foreground block sizes and annotation coverage:")
 print(t(ann_coverage))
 
 # --- Enrichment loop ---
@@ -305,7 +336,7 @@ for (patt in PATTERNS) {
   fg_set <- foreground_sets[[patt]]
   n_ann_fg <- sum(fg_set %in% unique(fg_go$gene_id))
   if (n_ann_fg < opt$min_genes) {
-    log_msg("WARN: pattern ", patt, " has only ", n_ann_fg,
+    log_msg("WARN: block ", patt, " has only ", n_ann_fg,
             " annotated foreground genes (< ", opt$min_genes, "); flagged as underpowered")
   }
 
@@ -328,7 +359,10 @@ for (patt in PATTERNS) {
         minGSSize     = opt$min_gs_size,
         maxGSSize     = opt$max_gs_size
       ),
-      error = function(e) { log_msg("ERROR in enricher for ", patt, " x ", ont, ": ", conditionMessage(e)); NULL }
+      error = function(e) {
+        log_msg("ERROR in enricher for ", patt, " x ", ont, ": ", conditionMessage(e))
+        NULL
+      }
     )
 
     if (is.null(er) || nrow(as.data.frame(er)) == 0) {
@@ -398,8 +432,11 @@ for (patt in PATTERNS) {
         labs(title = sprintf("GO %s enrichment: %s (top %d)", ont, patt, opt$top),
              x = "Gene ratio", y = NULL, size = "Count", color = "q-value") +
         theme_bw(base_size = 10)
+      dp_w <- 8; dp_h <- 0.28 * nrow(plot_df) + 2
       ggsave(file.path(PLOT_DIR, sprintf("dotplot_%s_%s.png", patt, ont)),
-             p, width = 8, height = 0.28 * nrow(plot_df) + 2, dpi = 300, limitsize = FALSE)
+             p, width = dp_w, height = dp_h, dpi = 300, limitsize = FALSE)
+      ggsave(file.path(PLOT_DIR, sprintf("dotplot_%s_%s.pdf", patt, ont)),
+             p, width = dp_w, height = dp_h, limitsize = FALSE)
     }
   }
 
@@ -427,28 +464,31 @@ for (patt in PATTERNS) {
         labs(title = sprintf("Top GO terms: %s (top 10 per ontology)", patt),
              x = expression(-log[10](q)), y = NULL, fill = "Ontology") +
         theme_bw(base_size = 10)
+      bp_w <- 9; bp_h <- 0.25 * nrow(combined_top) + 2
       ggsave(file.path(PLOT_DIR, sprintf("barplot_top_terms_%s.png", patt)),
-             p_bar, width = 9, height = 0.25 * nrow(combined_top) + 2, dpi = 300, limitsize = FALSE)
+             p_bar, width = bp_w, height = bp_h, dpi = 300, limitsize = FALSE)
+      ggsave(file.path(PLOT_DIR, sprintf("barplot_top_terms_%s.pdf", patt)),
+             p_bar, width = bp_w, height = bp_h, limitsize = FALSE)
     }
   }
 }
 
-# --- Comparison dotplot (BP across patterns) ---
+# --- Comparison dotplot (BP across selection blocks) ---
 
 bp_sets <- all_results[grep("_BP$", names(all_results))]
 if (length(bp_sets) > 0) {
   cmp <- do.call(rbind, lapply(bp_sets, function(x) {
     df <- x$result[x$result$q_value <= opt$qcut, , drop = FALSE]
     if (nrow(df) == 0) return(NULL)
-    df$pattern <- x$pattern
+    df$block <- x$pattern  # x$pattern stores the block label
     df
   }))
-  # If nothing sig, fall back to suggestive so we still contrast patterns.
+  # If nothing sig, fall back to suggestive so we still contrast blocks.
   if (is.null(cmp) || nrow(cmp) == 0) {
     cmp <- do.call(rbind, lapply(bp_sets, function(x) {
       df <- x$result[x$result$q_value <= 0.10, , drop = FALSE]
       if (nrow(df) == 0) return(NULL)
-      df$pattern <- x$pattern
+      df$block <- x$pattern
       df
     }))
     if (!is.null(cmp) && nrow(cmp) > 0) {
@@ -457,26 +497,28 @@ if (length(bp_sets) > 0) {
   }
   if (!is.null(cmp) && nrow(cmp) > 0) {
     cmp <- cmp %>%
-      group_by(pattern) %>%
+      group_by(block) %>%
       slice_min(order_by = q_value, n = 10, with_ties = FALSE) %>%
       ungroup()
     cmp$gene_ratio_num <- sapply(strsplit(as.character(cmp$gene_ratio), "/"),
                                  function(x) as.numeric(x[1]) / as.numeric(x[2]))
-    cmp$pattern <- factor(cmp$pattern, levels = PATTERNS)
+    cmp$block <- factor(cmp$block, levels = PATTERNS)
     cmp$go_term <- factor(cmp$go_term, levels = unique(cmp$go_term[order(cmp$q_value)]))
-    p_cmp <- ggplot(cmp, aes(x = pattern, y = go_term, size = gene_ratio_num, color = q_value)) +
+    p_cmp <- ggplot(cmp, aes(x = block, y = go_term, size = gene_ratio_num, color = q_value)) +
       geom_point() +
       scale_color_gradient(low = "red", high = "blue") +
-      labs(title = "GO BP enrichment across patterns",
+      labs(title = "GO BP enrichment across selection blocks",
            x = NULL, y = NULL, size = "Gene ratio", color = "q-value") +
       theme_bw(base_size = 10) +
       theme(axis.text.x = element_text(angle = 30, hjust = 1))
+    cmp_w <- 9; cmp_h <- 0.28 * length(unique(cmp$go_term)) + 2
     ggsave(file.path(PLOT_DIR, "comparison_dotplot.png"),
-           p_cmp, width = 8, height = 0.28 * length(unique(cmp$go_term)) + 2,
-           dpi = 300, limitsize = FALSE)
-    log_msg("Comparison dotplot written with ", nrow(cmp), " pattern x term rows.")
+           p_cmp, width = cmp_w, height = cmp_h, dpi = 300, limitsize = FALSE)
+    ggsave(file.path(PLOT_DIR, "comparison_dotplot.pdf"),
+           p_cmp, width = cmp_w, height = cmp_h, limitsize = FALSE)
+    log_msg("Comparison dotplot written with ", nrow(cmp), " block x term rows.")
   } else {
-    log_msg("Comparison plot skipped: no BP terms at q<=0.10 across any pattern.")
+    log_msg("Comparison plot skipped: no BP terms at q<=0.10 across any block.")
   }
 }
 
@@ -488,13 +530,13 @@ cat("GO Enrichment Summary (Task 4.3)\n")
 cat("Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
 cat("q cutoff: ", opt$qcut, "\n\n")
 
-cat("Foreground pattern sizes and annotation coverage:\n")
+cat("Foreground block sizes and annotation coverage:\n")
 print(as.data.frame(t(ann_coverage)))
-cat("\nDISCORDANT genes excluded from pattern-stratified runs: ", n_discordant, "\n\n")
+cat("\n")
 
-cat("Significant terms per pattern x ontology (q <=", opt$qcut, "):\n")
+cat("Significant terms per block x ontology (q <=", opt$qcut, "):\n")
 tab <- data.frame(
-  pattern   = character(0),
+  block     = character(0),
   ontology  = character(0),
   n_total   = integer(0),
   n_sig     = integer(0),
@@ -506,7 +548,7 @@ tab <- data.frame(
 for (key in names(all_results)) {
   r <- all_results[[key]]
   tab <- rbind(tab, data.frame(
-    pattern          = r$pattern,
+    block            = r$pattern,
     ontology         = r$ontology,
     n_total          = nrow(r$result),
     n_sig            = r$n_sig,

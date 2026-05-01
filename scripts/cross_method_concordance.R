@@ -2,7 +2,7 @@
 # project: BIOL624 Final Project
 # author: Reina Hastings (reinahastings13@gmail.com)
 # date created: 2026-04-13
-# last modified: 2026-04-13
+# last modified: 2026-04-28
 #
 # purpose:
 #   Integrate outlier SNPs from three detection methods (per-SNP percentile,
@@ -14,8 +14,13 @@
 # inputs:
 #   - results/per_snp_selection_scan/snp_summary_1pct_chifiltered.tsv
 #   - results/per_snp_selection_scan/outliers_1pct_chifiltered.tsv
-#   - results/outflank_diagnostic/EEU_vs_WEU/outflank_full_results.rds
-#   - results/outflank_diagnostic/EEU_vs_USA/outflank_full_results.rds
+#   - results/outflank_ldpruned/EEU_vs_WEU/outflank_full_results.rds
+#   - results/outflank_ldpruned/EEU_vs_USA/outflank_full_results.rds
+#   - results/outflank_ldpruned/USA_vs_WEU/outflank_full_results.rds
+#     (Task 4.7 re-run: OutFLANK on LD-pruned SNPs per Whitlock & Lotterhos
+#     2015. Pre-Task-4.7 inputs were results/outflank_diagnostic/... for
+#     only the first two comparisons; USA_vs_WEU added 2026-04-23 because
+#     the LD-pruned run produced 2 outliers there.)
 #   - results/pcadapt/pcadapt_outliers_q05.tsv
 #   - results/pcadapt/pcadapt_outliers_q01.tsv
 #   - data/plink/ladybug_snps.bim (88-sample SNP universe)
@@ -24,6 +29,7 @@
 # outputs:
 #   - results/cross_method_concordance/master_candidate_table.tsv
 #   - results/cross_method_concordance/concordance_summary.txt
+#   - results/cross_method_concordance/plots/venn_full_outliers.png
 #   - results/cross_method_concordance/plots/venn_post_invasion.png
 #   - results/cross_method_concordance/plots/venn_invasion_specific.png
 #   - results/cross_method_concordance/plots/manhattan_tier1.png
@@ -55,10 +61,15 @@ BASE_DIR <- ".."
 PERCENTILE_SUMMARY <- file.path(BASE_DIR, "results/per_snp_selection_scan/snp_summary_1pct_chifiltered.tsv")
 PERCENTILE_DETAIL  <- file.path(BASE_DIR, "results/per_snp_selection_scan/outliers_1pct_chifiltered.tsv")
 
-# OutFLANK RDS files (full results, not truncated TSVs)
+# OutFLANK RDS files (full results, not truncated TSVs).
+# NOTE (2026-04-23, Task 4.7): switched from results/outflank_diagnostic to
+# results/outflank_ldpruned (OutFLANK re-run on LD-pruned SNPs per Whitlock
+# & Lotterhos 2015). USA_vs_WEU added because the LD-pruned run produced
+# 2 outliers there; prior to Task 4.7 it had 0 and was omitted.
 OUTFLANK_RDS <- list(
-  EEU_vs_WEU = file.path(BASE_DIR, "results/outflank_diagnostic/EEU_vs_WEU/outflank_full_results.rds"),
-  EEU_vs_USA = file.path(BASE_DIR, "results/outflank_diagnostic/EEU_vs_USA/outflank_full_results.rds")
+  EEU_vs_WEU = file.path(BASE_DIR, "results/outflank_ldpruned/EEU_vs_WEU/outflank_full_results.rds"),
+  EEU_vs_USA = file.path(BASE_DIR, "results/outflank_ldpruned/EEU_vs_USA/outflank_full_results.rds"),
+  USA_vs_WEU = file.path(BASE_DIR, "results/outflank_ldpruned/USA_vs_WEU/outflank_full_results.rds")
 )
 
 # pcadapt inputs
@@ -73,8 +84,11 @@ BIM_PCADAPT <- file.path(BASE_DIR, "data/plink/ladybug_snps_pcadapt.bim")
 OUT_DIR  <- file.path(BASE_DIR, "results/cross_method_concordance")
 PLOT_DIR <- file.path(OUT_DIR, "plots")
 
-# Sex chromosome to exclude from concordance
-SEX_CHROM <- "NC_058189.1"
+# Sex chromosome to exclude from concordance.
+# NC_058198.1 is chromosome 10 (sex); the other 9 (NC_058189.1..NC_058197.1) are autosomes.
+# NOTE (2026-04-23): previously set to NC_058189.1, a typo that excluded an autosome and let
+# the true sex chromosome leak into the master table. Corrected as part of Task 4.7.
+SEX_CHROM <- "NC_058198.1"
 
 # Thresholds for Tier 2 "strong support" criteria
 PCADAPT_STRONG_Q <- 0.001
@@ -495,11 +509,15 @@ cat("  Note: CHI genotype count filter applied (>=3 of 4 CHI individuals genotyp
 cat("OutFLANK (q<0.05):", nrow(outflank_snps), "outlier SNPs\n")
 cat("  EEU_vs_WEU:", sum(grepl("EEU_vs_WEU", outflank_snps$outflank_comparisons)), "\n")
 cat("  EEU_vs_USA:", sum(grepl("EEU_vs_USA", outflank_snps$outflank_comparisons)), "\n")
-cat("  (Only among-invasive comparisons produce OutFLANK outliers)\n")
+cat("  USA_vs_WEU:", sum(grepl("USA_vs_WEU", outflank_snps$outflank_comparisons)), "\n")
+cat("  (Only among-invasive comparisons produce OutFLANK outliers; CHI-vs-*\n")
+cat("   comparisons fit but FSTbar ~0.05 is too high for any SNP to clear\n")
+cat("   the outlier threshold -- see Handoff Section 4.3 resolved question\n")
+cat("   2026-01-09.)\n")
 cat("pcadapt (q<0.05):", nrow(pcadapt_q05), "outlier SNPs\n\n")
 
 cat("--- Pairwise Concordance ---\n\n")
-for (i in 1:nrow(concordance_table)) {
+for (i in seq_len(nrow(concordance_table))) {
   row <- concordance_table[i, ]
   cat(sprintf("%s vs %s:\n", row$method_A, row$method_B))
   cat(sprintf("  %s: %d outliers | %s: %d outliers\n", row$method_A, row$n_A, row$method_B, row$n_B))
@@ -526,7 +544,7 @@ cat("\n")
 
 tier_summary <- master_out %>% count(confidence_tier)
 cat("Tier totals:\n")
-for (i in 1:nrow(tier_summary)) {
+for (i in seq_len(nrow(tier_summary))) {
   cat(sprintf("  Tier %d: %d SNPs (%.1f%%)\n",
               tier_summary$confidence_tier[i],
               tier_summary$n[i],
@@ -536,7 +554,7 @@ cat("\n")
 
 cat("--- Pattern Distribution ---\n\n")
 pattern_summary <- master_out %>% count(consensus_pattern)
-for (i in 1:nrow(pattern_summary)) {
+for (i in seq_len(nrow(pattern_summary))) {
   cat(sprintf("  %s: %d SNPs (%.1f%%)\n",
               pattern_summary$consensus_pattern[i],
               pattern_summary$n[i],
@@ -576,6 +594,51 @@ cat("  Concordance summary written to:", file.path(OUT_DIR, "concordance_summary
 ################################################################################
 
 cat("--- Step 6: Generating Venn diagrams ---\n\n")
+
+# --- 6a-pre. Three-way Venn for the FULL outlier sets (no pattern filter) ---
+# Headline cross-method concordance figure: every autosomal outlier from each
+# method, regardless of POST_INVASION/INVASION_SPECIFIC pattern. The two
+# pattern-filtered Venns below (6a, 6b) decompose this into the per-axis
+# views. Established Set1 palette: Percentile = red, OutFLANK = blue,
+# pcadapt = green, kept consistent across all three Venns.
+n_three_way <- length(three_way)
+n_two_only  <- length(two_of_three)
+n_pct_of    <- length(setdiff(intersect(set_pct, set_outflank),  set_pcadapt))
+n_pct_pca   <- length(setdiff(intersect(set_pct, set_pcadapt),   set_outflank))
+n_of_pca    <- length(setdiff(intersect(set_outflank, set_pcadapt), set_pct))
+
+cat("ALL OUTLIERS Venn (3-way, full sets):\n")
+cat("  Percentile:", length(set_pct), "\n")
+cat("  OutFLANK:", length(set_outflank), "\n")
+cat("  pcadapt:", length(set_pcadapt), "\n")
+cat(sprintf("  Three-way overlap: %d SNPs | Two-method overlap: %d SNPs (%d + %d + %d)\n",
+            n_three_way, n_two_only, n_pct_of, n_pct_pca, n_of_pca))
+
+venn_full_file <- file.path(PLOT_DIR, "venn_full_outliers.png")
+
+invisible(venn.diagram(
+  x = list(
+    Percentile = set_pct,
+    OutFLANK   = set_outflank,
+    pcadapt    = set_pcadapt
+  ),
+  filename     = venn_full_file,
+  imagetype    = "png",
+  height       = 2400, width = 2400, resolution = 300,
+  fill         = c("#E41A1C", "#377EB8", "#4DAF4A"),
+  alpha        = 0.4,
+  cex          = 1.2,
+  cat.cex      = 1.1,
+  cat.fontface = "bold",
+  main         = "Cross-method outlier concordance (autosomal SNPs)",
+  main.cex     = 1.3,
+  sub          = sprintf(
+    "Three-way overlap: %d SNPs  |  Two-method overlap: %d SNPs (%d + %d + %d)",
+    n_three_way, n_two_only, n_pct_of, n_pct_pca, n_of_pca
+  ),
+  sub.cex = 0.95
+))
+cat("  Full-set 3-way Venn saved to:", venn_full_file, "\n\n")
 
 # --- 6a. Three-way Venn for POST_INVASION SNPs ---
 # (where all 3 methods can contribute)
@@ -794,6 +857,7 @@ cat("Output files:\n")
 cat("  ", file.path(OUT_DIR, "master_candidate_table.tsv"), "\n")
 cat("  ", file.path(OUT_DIR, "concordance_summary.txt"), "\n")
 cat("  ", file.path(OUT_DIR, "pcadapt_sex_chrom_outliers.tsv"), "\n")
+cat("  ", venn_full_file, "\n")
 cat("  ", venn_3way_file, "\n")
 cat("  ", venn_2way_file, "\n")
 cat("  ", manhattan_file, "\n\n")
